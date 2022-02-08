@@ -10,9 +10,9 @@
  * GNU General Public License for more details.
  */
 
-#include "../../../../../../drivers/video/msm/mdss/samsung/S6E8AA5X01_AMS561RA01/dsi_panel_S6E8AA5X01_AMS561RA01_hd_octa_video.dtsi"
-#include "../../../../../../drivers/video/msm/mdss/samsung/S6E8AA5X01_AMS604RM01/dsi_panel_S6E8AA5X01_AMS604RM01_hd_octa_video.dtsi"
-#include "../../../../../../drivers/video/msm/mdss/samsung/PBA_BOOTING/dsi_panel_PBA_BOOTING_fhd_video.dtsi"
+#include "../../../../../drivers/video/fbdev/msm/samsung/S6E8AA5X01_AMS561RA01/dsi_panel_S6E8AA5X01_AMS561RA01_hd_octa_video.dtsi"
+#include "../../../../../drivers/video/fbdev/msm/samsung/S6E8AA5X01_AMS604RM01/dsi_panel_S6E8AA5X01_AMS604RM01_hd_octa_video.dtsi"
+#include "../../../../../drivers/video/fbdev/msm/samsung/PBA_BOOTING/dsi_panel_PBA_BOOTING_fhd_video.dtsi"
 
 /*
  * SOC Setting (TLMM Pin Control & SPI Setting)
