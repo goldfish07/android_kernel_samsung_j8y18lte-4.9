@@ -11,7 +11,7 @@
  * GNU General Public License for more details.
  */
 
-#include "../qcom/msm-audio.dtsi"
+#include "../qcom/msm8953-audio.dtsi"
 
 &pm8953_vadc {
 	chan@11 {
