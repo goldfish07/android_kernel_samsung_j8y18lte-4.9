@@ -1097,9 +1097,9 @@ static void mdss_sasmung_panel_debug_create(struct samsung_display_driver_data *
 	/* Create file on debugfs on dump */
 	debugfs_create_file("reg_dump", 0600, debug_data->dump,	vdd, &panel_dump_ops);
 	debugfs_create_bool("print_cmds", 0600, debug_data->dump,
-		(u32 *)&debug_data->print_cmds);
+		&debug_data->print_cmds);
 	debugfs_create_bool("panic_on_pptimeout", 0600, debug_data->dump,
-		(u32 *)&debug_data->panic_on_pptimeout);
+		&debug_data->panic_on_pptimeout);
 
 	/* Create file on debugfs on display_status */
 	debugfs_create_u32("panel_attach_status", 0600, debug_data->display_status,
@@ -1113,7 +1113,7 @@ static void mdss_sasmung_panel_debug_create(struct samsung_display_driver_data *
 
 	if (!IS_ERR_OR_NULL(debug_data->is_factory_mode))
 		debugfs_create_bool("is_factory_mode", 0600, debug_data->root,
-			(u32 *)debug_data->is_factory_mode);
+			debug_data->is_factory_mode);
 
 	/* Create file on debugfs on hw_info */
 	/* TBD */

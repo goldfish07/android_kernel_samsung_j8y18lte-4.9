@@ -4195,7 +4195,7 @@ __setup("hall_ic=0x", get_hall_ic_status);
 void set_normal_br_values(struct samsung_display_driver_data *vdd, int ndx)
 {
 	int from, end;
-	int left, right, p;
+	int left, right, p=0;
 	int loop = 0;
 	struct candela_map_table *table;
 
@@ -4748,7 +4748,7 @@ int mdss_samsung_brightness_dcs(struct mdss_dsi_ctrl_pdata *ctrl, int level)
 void set_hmt_br_values(struct samsung_display_driver_data *vdd, int ndx)
 {
 	int from, end;
-	int left, right, p;
+	int left, right, p=0;
 	struct candela_map_table *table;
 
 	table = &vdd->dtsi_data[ndx].hmt_candela_map_table[vdd->panel_revision];

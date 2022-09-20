@@ -580,7 +580,7 @@ static struct ssreg_pdata *ssreg_parse_dt(struct device *dev)
 
 	pdata->regulators = rdata;
 	for_each_child_of_node(regulators_np, reg_np) {
-		rdata->initdata = of_get_regulator_init_data(dev, reg_np);
+		rdata->initdata = of_get_regulator_init_data(dev, reg_np, NULL);
 		rdata->of_node = reg_np;
 
 		of_property_read_u32(reg_np, "regulator-type",

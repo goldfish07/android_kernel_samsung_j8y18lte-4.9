@@ -57,8 +57,13 @@
 #define C0_G_Y		0	/* G/luma */
 
 /* wait for at most 2 vsync for lowest refresh rate (24hz) */
+#if defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
+#define KOFF_TIMEOUT_MS 1000
+#define KOFF_TIMEOUT msecs_to_jiffies(1000)
+#else
 #define KOFF_TIMEOUT_MS 84
 #define KOFF_TIMEOUT msecs_to_jiffies(KOFF_TIMEOUT_MS)
+#endif
 
 #define OVERFETCH_DISABLE_TOP		BIT(0)
 #define OVERFETCH_DISABLE_BOTTOM	BIT(1)
@@ -350,6 +355,10 @@ struct mdss_mdp_ctl_intfs_ops {
 
 	/* to update lineptr, [1..yres] - enable, 0 - disable */
 	int (*update_lineptr)(struct mdss_mdp_ctl *ctl, bool enable);
+
+#if defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
+	int (*wait_video_pingpong) (struct mdss_mdp_ctl *ctl, void *arg);
+#endif
 
 	/* to wait for vsync */
 	int (*wait_for_vsync_fnc)(struct mdss_mdp_ctl *ctl);
@@ -1984,4 +1993,8 @@ void mdss_mdp_free_layer_pp_info(struct mdp_input_layer *layer)
 }
 
 #endif /* CONFIG_FB_MSM_MDP_NONE */
+
+#if defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
+void samsung_timing_engine_control(int enable);
+#endif
 #endif /* MDSS_MDP_H */
