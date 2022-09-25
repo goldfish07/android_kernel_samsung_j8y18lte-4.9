@@ -11,7 +11,7 @@
  * GNU General Public License for more details.
  */
 
-#include "../qcom/sdm450.dtsi"
+#include "sdm450.dtsi"
 #include "sdm450-sec-common.dtsi"
 #include "sdm450-sec-j8y18lte_audio.dtsi"
 #include "sdm450-sec-j8y18lte-input-common.dtsi"
