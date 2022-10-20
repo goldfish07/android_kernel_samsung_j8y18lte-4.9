@@ -1443,5 +1443,6 @@ config TOUCHSCREEN_EKTF3XXX_CHIPSET
 	  report 10 touches at a time.
 
 		  If unusre, say N.
-
+		  
+source "drivers/input/touchscreen/zinitix/Kconfig"
 endif
