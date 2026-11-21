@@ -40,6 +40,9 @@
 #include <linux/regulator/consumer.h>
 #include <linux/pm_wakeup.h>
 #include <linux/power_supply.h>
+#if IS_ENABLED(CONFIG_SEC_J8Y18LTE_PROJECT)
+#include <linux/muic/muic_notifier.h>
+#endif
 #include <linux/cdev.h>
 #include <linux/completion.h>
 #include <linux/msm-bus.h>
@@ -311,6 +314,10 @@ struct dwc3_msm {
 	struct notifier_block	id_nb;
 	struct notifier_block	eud_event_nb;
 	struct notifier_block	host_restart_nb;
+#if IS_ENABLED(CONFIG_SEC_J8Y18LTE_PROJECT)
+	struct notifier_block	j8_muic_nb;
+	int			j8_usb_type;
+#endif
 
 	struct notifier_block	host_nb;
 	bool			xhci_ss_compliance_enable;
@@ -3336,6 +3343,39 @@ static int dwc3_msm_eud_notifier(struct notifier_block *nb,
 	return NOTIFY_DONE;
 }
 
+#if IS_ENABLED(CONFIG_SEC_J8Y18LTE_PROJECT)
+/* J8's SM5708 reports cable events through MUIC rather than extcon. */
+static int dwc3_msm_j8_muic_notifier(struct notifier_block *nb,
+		unsigned long action, void *data)
+{
+	struct dwc3_msm *mdwc = container_of(nb, struct dwc3_msm, j8_muic_nb);
+	muic_attached_dev_t cable = *(muic_attached_dev_t *)data;
+	bool attached;
+
+	if (action != MUIC_NOTIFY_CMD_ATTACH && action != MUIC_NOTIFY_CMD_DETACH)
+		return NOTIFY_DONE;
+
+	switch (cable) {
+	case ATTACHED_DEV_USB_MUIC:
+	case ATTACHED_DEV_CDP_MUIC:
+	case ATTACHED_DEV_UNOFFICIAL_ID_CDP_MUIC:
+	case ATTACHED_DEV_JIG_USB_OFF_MUIC:
+	case ATTACHED_DEV_JIG_USB_ON_MUIC:
+		break;
+	default:
+		return NOTIFY_DONE;
+	}
+
+	attached = action == MUIC_NOTIFY_CMD_ATTACH;
+	mdwc->j8_usb_type = !attached ? POWER_SUPPLY_TYPE_UNKNOWN :
+		(cable == ATTACHED_DEV_CDP_MUIC ||
+		 cable == ATTACHED_DEV_UNOFFICIAL_ID_CDP_MUIC ?
+		 POWER_SUPPLY_TYPE_USB_CDP : POWER_SUPPLY_TYPE_USB);
+	dev_info(mdwc->dev, "J8 MUIC USB cable=%d attached=%d\n", cable, attached);
+	return dwc3_msm_vbus_notifier(&mdwc->vbus_nb, attached, NULL);
+}
+#endif
+
 static int dwc3_msm_extcon_register(struct dwc3_msm *mdwc, int start_idx)
 {
 	struct device_node *node = mdwc->dev->of_node;
@@ -3952,6 +3992,9 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 	mdwc->type_c = true;
 	if (of_property_read_bool(node, "qcom,connector-type-uAB"))
 		mdwc->type_c = false;
+#if IS_ENABLED(CONFIG_SEC_J8Y18LTE_PROJECT)
+	mdwc->type_c = false;
+#endif
 
 	mdwc->usb_psy = power_supply_get_by_name("usb");
 	if (!mdwc->usb_psy) {
@@ -4002,6 +4045,14 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 		dwc3_ext_event_notify(mdwc);
 	}
 
+#if IS_ENABLED(CONFIG_SEC_J8Y18LTE_PROJECT)
+	ret = muic_notifier_register(&mdwc->j8_muic_nb,
+			dwc3_msm_j8_muic_notifier, MUIC_NOTIFY_DEV_USB);
+	if (ret) {
+		dev_err(mdwc->dev, "J8 MUIC registration failed: %d\n", ret);
+		goto put_psy;
+	}
+#endif
 	return 0;
 
 put_psy:
@@ -4032,6 +4083,9 @@ static int dwc3_msm_remove(struct platform_device *pdev)
 	struct dwc3 *dwc = platform_get_drvdata(mdwc->dwc3);
 	int ret_pm;
 
+#if IS_ENABLED(CONFIG_SEC_J8Y18LTE_PROJECT)
+	muic_notifier_unregister(&mdwc->j8_muic_nb);
+#endif
 	device_remove_file(&pdev->dev, &dev_attr_mode);
 	device_remove_file(&pdev->dev, &dev_attr_xhci_link_compliance);
 	if (mdwc->usb_psy)
@@ -4540,6 +4594,9 @@ static int get_psy_type(struct dwc3_msm *mdwc)
 {
 	union power_supply_propval pval = {0};
 
+#if IS_ENABLED(CONFIG_SEC_J8Y18LTE_PROJECT)
+	return mdwc->j8_usb_type;
+#endif
 	if (mdwc->charging_disabled)
 		return -EINVAL;
 
@@ -4562,6 +4619,10 @@ static int dwc3_msm_gadget_vbus_draw(struct dwc3_msm *mdwc, unsigned int mA)
 	union power_supply_propval pval = {0};
 	int ret, psy_type;
 
+#if IS_ENABLED(CONFIG_SEC_J8Y18LTE_PROJECT)
+	/* Samsung battery/MUIC owns SM5708 charge-current policy. */
+	return 0;
+#endif
 	psy_type = get_psy_type(mdwc);
 	if (psy_type == POWER_SUPPLY_TYPE_USB_FLOAT) {
 		if (!mA)
