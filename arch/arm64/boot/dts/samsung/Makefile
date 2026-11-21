@@ -1,3 +1,12 @@
+ifeq ($(CONFIG_SEC_J8Y18LTE_PROJECT),y)
+dtb-$(CONFIG_MACH_J8Y18LTE_SWA_INS) += sdm450-sec-j8y18lte_swa_ins-r00.dtb \
+	sdm450-sec-j8y18lte_swa_ins-r01.dtb \
+	sdm450-sec-j8y18lte_swa_ins-r02.dtb \
+	sdm450-sec-j8y18lte_swa_ins-r03.dtb
+always := $(dtb-y)
+subdir-y := $(dts-dirs)
+clean-files := *.dtb
+else
 ifeq ($(CONFIG_BUILD_ARM64_DT_OVERLAY),y)
 dtbo-$(CONFIG_ARCH_ZQL1695) += samsung-sdm439-qrd-r00-default-overlay.dtbo \
 	samsung-sdm439-qrd-r01-overlay.dtbo \
@@ -149,3 +158,4 @@ dtb-$(CONFIG_ARCH_SDM845_VM) += sdm845-vm.dtb
 always		:= $(dtb-y)
 subdir-y	:= $(dts-dirs)
 clean-files	:= *.dtb
+endif # CONFIG_SEC_J8Y18LTE_PROJECT

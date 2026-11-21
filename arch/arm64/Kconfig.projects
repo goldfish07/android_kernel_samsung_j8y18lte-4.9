@@ -4,3 +4,13 @@ config MACH_M11Q_EUR_OPEN
 	help
 	  Support for Samsung ZQL1695 M11Q EUR OPEN device.
 
+config SEC_J8Y18LTE_PROJECT
+	bool "Samsung Galaxy J8 (2018)"
+	depends on ARCH_MSM8953 && ARCH_SDM450
+	help
+	  Enable the Samsung Galaxy J8 SDM450 board and peripheral support.
+
+config MACH_J8Y18LTE_SWA_INS
+	bool "Samsung J8 SWA INS board revisions 0 through 3"
+	depends on SEC_J8Y18LTE_PROJECT
+
