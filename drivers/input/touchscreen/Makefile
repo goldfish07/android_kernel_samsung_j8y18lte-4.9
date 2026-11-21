@@ -124,3 +124,4 @@ obj-$(CONFIG_TOUCHSCREEN_FTS_1871)	+= focaltech_touch_1871/
 obj-$(CONFIG_TOUCHSCREEN_HIMAX_CHIPSET)	+= hxchipset/
 obj-$(CONFIG_TOUCHSCREEN_ILI)	+= ilitek_7806s_HS70/
 # huaqin add for HS70-35 bringup TP function by zhouzichun at 2019/09/29 end
+obj-$(CONFIG_TOUCHSCREEN_ZINITIX_ZT75XX_TCLM) += zinitix/

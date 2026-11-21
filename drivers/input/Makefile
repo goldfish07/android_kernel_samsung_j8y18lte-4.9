@@ -10,6 +10,10 @@ input-core-y := input.o input-compat.o input-mt.o ff-core.o
 obj-$(CONFIG_INPUT_TOUCHSCREEN)	+= sec_cmd.o
 # HS60 add for SR-ZQL1695-01000000583 by liufurong at 20190724 end
 
+obj-$(CONFIG_SEC_DEBUG_TSP_LOG) += sec_tsp_log.o
+obj-$(CONFIG_INPUT_TOUCHSCREEN)	+= sec_cmd.o
+obj-$(CONFIG_INPUT_TOUCHSCREEN_TCLMV2)	+= sec_tclm_v2.o
+
 obj-$(CONFIG_INPUT_FF_MEMLESS)	+= ff-memless.o
 obj-$(CONFIG_INPUT_POLLDEV)	+= input-polldev.o
 obj-$(CONFIG_INPUT_SPARSEKMAP)	+= sparse-keymap.o
@@ -20,7 +24,9 @@ obj-$(CONFIG_INPUT_MOUSEDEV)	+= mousedev.o
 obj-$(CONFIG_INPUT_JOYDEV)	+= joydev.o
 obj-$(CONFIG_INPUT_EVDEV)	+= evdev.o
 obj-$(CONFIG_SEC_INPUT_BOOSTER)	+= input_booster.o
+ifeq ($(CONFIG_SEC_INPUT_BOOSTER),y)
 obj-$(CONFIG_ARCH_QCOM)	+= input_booster_qc.o
+endif
 obj-$(CONFIG_INPUT_EVBUG)	+= evbug.o
 
 obj-$(CONFIG_INPUT_KEYBOARD)	+= keyboard/

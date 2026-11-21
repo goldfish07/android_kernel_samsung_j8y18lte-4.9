@@ -499,12 +499,14 @@ static ssize_t sec_cmd_list_show(struct device *dev,
 
 	return snprintf(buf, SEC_CMD_BUF_SIZE, "%s\n", buffer);
 }
+#ifndef CONFIG_SEC_J8Y18LTE_PROJECT
 #define INPUT_FEATURE_ENABLE_SETTINGS_AOT (1 << 0) /* Double tap wakeup settings */
 static ssize_t support_feature_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
 	return sprintf(buf,"%x\n", INPUT_FEATURE_ENABLE_SETTINGS_AOT);
 }
+#endif
 
 static DEVICE_ATTR(cmd, 0220, NULL, sec_cmd_store);
 static DEVICE_ATTR(cmd_status, 0444, sec_cmd_show_status, NULL);
@@ -512,7 +514,9 @@ static DEVICE_ATTR(cmd_status_all, 0444, sec_cmd_show_status_all, NULL);
 static DEVICE_ATTR(cmd_result, 0444, sec_cmd_show_result, NULL);
 static DEVICE_ATTR(cmd_result_all, 0444, sec_cmd_show_result_all, NULL);
 static DEVICE_ATTR(cmd_list, 0444, sec_cmd_list_show, NULL);
+#ifndef CONFIG_SEC_J8Y18LTE_PROJECT
 static DEVICE_ATTR(support_feature, 0444, support_feature_show, NULL);
+#endif
 
 static struct attribute *sec_fac_attrs[] = {
 	&dev_attr_cmd.attr,
@@ -521,7 +525,9 @@ static struct attribute *sec_fac_attrs[] = {
 	&dev_attr_cmd_result.attr,
 	&dev_attr_cmd_result_all.attr,
 	&dev_attr_cmd_list.attr,
+#ifndef CONFIG_SEC_J8Y18LTE_PROJECT
 	&dev_attr_support_feature.attr,
+#endif
 	NULL,
 };
 

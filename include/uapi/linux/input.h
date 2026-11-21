@@ -364,6 +364,23 @@ struct input_mask {
 #define FF_STATUS_PLAYING	0x01
 #define FF_STATUS_MAX		0x01
 
+#define KEY_BLACK_UI_GESTURE	0x1c7
+
+/*
+ * Switch events
+ */
+#define SW_GLOVE		0x20
+
+/*
+ * Keys and buttons
+ */
+#define KEY_RECENT		254	/* RECENT / switching application */
+
+/*
+ * Absolute axes
+ */
+#define ABS_MT_PALM 		0x3e	/* palm touch */
+
 /*
  * Structures used in ioctls to upload effects to a device
  * They are pieces of a bigger structure (called ff_effect)

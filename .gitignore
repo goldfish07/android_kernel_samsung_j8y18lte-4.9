@@ -118,3 +118,6 @@ all.config
 
 # fetched Android config fragments
 kernel/configs/android-*.cfg
+
+# Samsung supplies these as touchscreen firmware source includes, not compiler output.
+!drivers/input/touchscreen/**/include/firmware/*.i
