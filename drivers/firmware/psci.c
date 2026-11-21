@@ -14,6 +14,9 @@
 #define pr_fmt(fmt) "psci: " fmt
 
 #include <linux/acpi.h>
+#include <linux/atomic.h>
+#include <linux/jiffies.h>
+#include <linux/sched.h>
 #include <linux/arm-smccc.h>
 #include <linux/cpuidle.h>
 #include <linux/errno.h>
@@ -123,13 +126,39 @@ static unsigned long __invoke_psci_fn_hvc(unsigned long function_id,
 	return res.a0;
 }
 
+/* J8 diagnostic window uses no clock APIs: PSCI also runs during early boot. */
+static atomic_t j8_psci_sequence = ATOMIC_INIT(0);
+
+static unsigned int j8_psci_diag_begin(unsigned long function_id)
+{
+	unsigned long ticks;
+	unsigned int seq;
+
+	if (!IS_ENABLED(CONFIG_SEC_J8Y18LTE_PROJECT))
+		return 0;
+	ticks = jiffies - INITIAL_JIFFIES;
+	if (ticks < 35UL * HZ || ticks >= 1800UL * HZ)
+		return 0;
+	/* Idle calls can be very frequent; the TZ snapshot reports their counters. */
+	if ((function_id & ~0x40000000UL) == PSCI_0_2_FN_CPU_SUSPEND)
+		return 0;
+	seq = atomic_inc_return(&j8_psci_sequence);
+	pr_err("J8_RESET_PSCI begin seq=%u fn=%#lx pid=%d cpu=%u\n",
+	       seq, function_id, current->pid, raw_smp_processor_id());
+	return seq;
+}
+
 static unsigned long __invoke_psci_fn_smc(unsigned long function_id,
 			unsigned long arg0, unsigned long arg1,
 			unsigned long arg2)
 {
 	struct arm_smccc_res res;
+	unsigned int seq = j8_psci_diag_begin(function_id);
 
 	arm_smccc_smc(function_id, arg0, arg1, arg2, 0, 0, 0, 0, &res);
+	if (seq)
+		pr_err("J8_RESET_PSCI end seq=%u ret=%#lx pid=%d cpu=%u\n",
+		       seq, res.a0, current->pid, raw_smp_processor_id());
 	return res.a0;
 }
 

@@ -18,6 +18,13 @@
 #include <linux/err.h>
 #include <linux/init.h>
 #include <linux/delay.h>
+#include <linux/atomic.h>
+#include <linux/sched.h>
+#include <linux/jiffies.h>
+#include <linux/mm.h>
+#include <linux/fs.h>
+#include <linux/file.h>
+#include <linux/smp.h>
 
 #include <asm/cacheflush.h>
 #include <asm/compiler.h>
@@ -37,6 +44,40 @@
 #define SCM_V2_EBUSY		-12
 
 static DEFINE_MUTEX(scm_lock);
+
+/*
+ * Temporary J8 bring-up diagnostics. Do not print SCM arguments or buffers.
+ * SCM may be called before timekeeping_init(), so the gate only reads jiffies.
+ */
+static atomic_t j8_scm_diag_sequence = ATOMIC_INIT(0);
+
+static unsigned int j8_scm_diag_begin(u64 fn_id, bool atomic_call)
+{
+	unsigned long boot_ticks;
+	unsigned int sequence;
+
+	if (!IS_ENABLED(CONFIG_SEC_J8Y18LTE_PROJECT))
+		return 0;
+	boot_ticks = jiffies - INITIAL_JIFFIES;
+	if (boot_ticks < 35UL * HZ ||
+	    boot_ticks >= 1800UL * HZ)
+		return 0;
+	/* DCVS polling dominates logs and obscures boot-completion failures. */
+	if ((fn_id & ~0x80000000ULL) == 0x42000904ULL)
+		return 0;
+	sequence = atomic_inc_return(&j8_scm_diag_sequence);
+	pr_err("J8_RESET_SCM begin seq=%u fn=%#llx atomic=%u pid=%d cpu=%u\n",
+		sequence, fn_id, atomic_call, current->pid,
+		raw_smp_processor_id());
+	return sequence;
+}
+
+static void j8_scm_diag_end(unsigned int sequence, int ret)
+{
+	if (sequence)
+		pr_err("J8_RESET_SCM end seq=%u ret=%d pid=%d cpu=%u\n",
+			sequence, ret, current->pid, raw_smp_processor_id());
+}
 
 /*
  * MSM8996 V2 requires a lock to protect against
@@ -635,11 +676,59 @@ static int allocate_extra_arg_buffer(struct scm_desc *desc, gfp_t flags)
 	return 0;
 }
 
+/*
+ * J8 firmware's process-authentication clients inspect normal memory beyond
+ * SCM request buffers. Preserve the stock 3.18 cache maintenance for them.
+ * Android 11 names Proca by its long executable name, truncated in task->comm.
+ */
+static bool j8_scm_needs_cache_sync(void)
+{
+	static const char * const legacy_clients[] = {
+		"secure_storage_", "pa_daemon", "proca@1.0-servi",
+		"vaultkeeper@1.0", "vaultkeeperd", "keymaster@3.0-s",
+		"wsmd", "wsm@1.0-service",
+	};
+	struct file *exe;
+	unsigned int i;
+	bool match;
+
+	if (!IS_ENABLED(CONFIG_SEC_J8Y18LTE_PROJECT))
+		return false;
+	for (i = 0; i < ARRAY_SIZE(legacy_clients); i++)
+		if (!strncmp(current->comm, legacy_clients[i], TASK_COMM_LEN - 1))
+			return true;
+	if (strncmp(current->comm, "vendor.samsung.", TASK_COMM_LEN - 1))
+		return false;
+	exe = get_task_exe_file(current);
+	if (!exe)
+		return false;
+	match = !strcmp(exe->f_path.dentry->d_name.name,
+		"vendor.samsung.hardware.security.proca@2.0-service");
+	fput(exe);
+	return match;
+}
+
+static void j8_scm_flush_cpu_cache(void *unused)
+{
+	(void)unused;
+	flush_cache_all();
+}
+
+static void j8_scm_sync_client_caches(bool needed)
+{
+	if (!needed)
+		return;
+	flush_cache_all();
+	smp_call_function(j8_scm_flush_cpu_cache, NULL, 1);
+}
+
 static int __scm_call2(u32 fn_id, struct scm_desc *desc, bool retry)
 {
+	bool cache_sync;
 	int arglen = desc->arginfo & 0xf;
 	int ret, retry_count = 0;
 	u64 x0;
+	unsigned int j8_sequence;
 
 	if (unlikely(!is_scm_armv8()))
 		return -ENODEV;
@@ -648,6 +737,7 @@ static int __scm_call2(u32 fn_id, struct scm_desc *desc, bool retry)
 	if (ret)
 		return ret;
 
+	cache_sync = j8_scm_needs_cache_sync();
 	x0 = fn_id | scm_version_mask;
 	do {
 		mutex_lock(&scm_lock);
@@ -658,6 +748,12 @@ static int __scm_call2(u32 fn_id, struct scm_desc *desc, bool retry)
 		desc->ret[0] = desc->ret[1] = desc->ret[2] = 0;
 
 		trace_scm_call_start(x0, desc);
+		j8_sequence = j8_scm_diag_begin(x0, false);
+		if (cache_sync && j8_sequence)
+			pr_err("J8_SCM_CACHE begin seq=%u pid=%d\n", j8_sequence, current->pid);
+		j8_scm_sync_client_caches(cache_sync);
+		if (cache_sync && j8_sequence)
+			pr_err("J8_SCM_CACHE end seq=%u pid=%d\n", j8_sequence, current->pid);
 
 		if (scm_version == SCM_ARMV8_64)
 			ret = __scm_call_armv8_64(x0, desc->arginfo,
@@ -672,6 +768,7 @@ static int __scm_call2(u32 fn_id, struct scm_desc *desc, bool retry)
 						  &desc->ret[0], &desc->ret[1],
 						  &desc->ret[2]);
 
+		j8_scm_diag_end(j8_sequence, ret);
 		trace_scm_call_end(desc);
 
 		if (SCM_SVC_ID(fn_id) == SCM_SVC_LMH)
@@ -750,6 +847,7 @@ int scm_call2_atomic(u32 fn_id, struct scm_desc *desc)
 	int arglen = desc->arginfo & 0xf;
 	int ret;
 	u64 x0;
+	unsigned int j8_sequence;
 
 	if (unlikely(!is_scm_armv8()))
 		return -ENODEV;
@@ -759,6 +857,7 @@ int scm_call2_atomic(u32 fn_id, struct scm_desc *desc)
 		return ret;
 
 	x0 = fn_id | BIT(SMC_ATOMIC_SYSCALL) | scm_version_mask;
+	j8_sequence = j8_scm_diag_begin(x0, true);
 
 	if (scm_version == SCM_ARMV8_64)
 		ret = __scm_call_armv8_64(x0, desc->arginfo, desc->args[0],
@@ -770,6 +869,7 @@ int scm_call2_atomic(u32 fn_id, struct scm_desc *desc)
 					  desc->args[1], desc->args[2],
 					  desc->x5, &desc->ret[0],
 					  &desc->ret[1], &desc->ret[2]);
+	j8_scm_diag_end(j8_sequence, ret);
 	if (ret < 0)
 		pr_err("scm_call failed: func id %#llx, ret: %d, syscall returns: %#llx, %#llx, %#llx\n",
 			x0, ret, desc->ret[0],

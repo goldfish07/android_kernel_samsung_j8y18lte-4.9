@@ -23,6 +23,10 @@
 #include <linux/types.h>
 #include <linux/uaccess.h>
 #include <linux/of.h>
+#include <linux/jiffies.h>
+#include <linux/workqueue.h>
+
+#include "j8_tz_snapshot.h"
 
 #include <soc/qcom/scm.h>
 #include <soc/qcom/qseecomi.h>
@@ -324,6 +328,47 @@ static struct tzdbg tzdbg = {
 
 static struct tzdbg_log_t *g_qsee_log;
 static uint32_t debug_rw_buf_size;
+
+/* Bounded diagnostics only on J8; never read firmware log/key buffers. */
+static struct j8_tz_snapshot j8_tz_previous;
+static bool j8_tz_seen;
+static unsigned int j8_tz_samples;
+static void j8_tz_snapshot_workfn(struct work_struct *work);
+static DECLARE_DELAYED_WORK(j8_tz_snapshot_work, j8_tz_snapshot_workfn);
+
+static void j8_tz_snapshot_workfn(struct work_struct *work)
+{
+	struct j8_tz_snapshot snapshot;
+	unsigned long boot_ticks = jiffies - INITIAL_JIFFIES;
+	unsigned int cpu;
+	bool changed;
+
+	if (!IS_ENABLED(CONFIG_SEC_J8Y18LTE_PROJECT) || boot_ticks >= 1800UL * HZ)
+		return;
+	if (!j8_tz_read_snapshot(tzdbg.virt_iobase, debug_rw_buf_size,
+				 tzdbg.tz_version, &snapshot)) {
+		pr_err("J8_TZ_SNAPSHOT invalid or unsupported counter table; stopped\n");
+		return;
+	}
+	changed = !j8_tz_seen || memcmp(&snapshot, &j8_tz_previous, sizeof(snapshot));
+	if (changed || !(j8_tz_samples % 5))
+		pr_err("J8_TZ_SNAPSHOT sample=%u version=%#x qsee=%#x cpus=%u changed=%u\n",
+		       j8_tz_samples, snapshot.version, tzdbg.tz_version,
+		       snapshot.cpu_count, changed);
+	if (changed) {
+		for (cpu = 0; cpu < snapshot.cpu_count; cpu++) {
+			u32 *v = snapshot.counters[cpu];
+
+			pr_err("J8_TZ_CPU cpu=%u wb=%u/%u pc=%u/%u psci=%u/%u reset=%#x/%u\n",
+			       cpu, v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7]);
+		}
+		j8_tz_previous = snapshot;
+		j8_tz_seen = true;
+	}
+	j8_tz_samples++;
+	schedule_delayed_work(&j8_tz_snapshot_work, 2UL * HZ);
+}
+
 
 /*
  * Debugfs data structure and functions
@@ -1155,6 +1200,13 @@ static int tz_log_probe(struct platform_device *pdev)
 
 	tzdbg_get_tz_version();
 
+	if (IS_ENABLED(CONFIG_SEC_J8Y18LTE_PROJECT)) {
+		unsigned long ticks = jiffies - INITIAL_JIFFIES;
+
+		schedule_delayed_work(&j8_tz_snapshot_work,
+				     ticks < 35UL * HZ ? 35UL * HZ - ticks : 0);
+	}
+
 	return 0;
 err:
 	kfree(tzdbg.diag_buf);
@@ -1164,6 +1216,7 @@ err:
 
 static int tz_log_remove(struct platform_device *pdev)
 {
+	cancel_delayed_work_sync(&j8_tz_snapshot_work);
 	kzfree(tzdbg.diag_buf);
 	if (tzdbg.hyp_diag_buf)
 		kzfree(tzdbg.hyp_diag_buf);
