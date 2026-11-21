@@ -464,7 +464,7 @@ static struct notifier_block nb = {
 	.notifier_call = modem_notifier_cb,
 };
 
-static void shared_hyp_mapping(int client_id)
+static int shared_hyp_mapping(int client_id)
 {
 	int ret;
 	u32 source_vmlist[1] = {VMID_HLOS};
@@ -473,7 +473,7 @@ static void shared_hyp_mapping(int client_id)
 
 	if (client_id == DHMS_MEM_CLIENT_INVALID) {
 		pr_err("memshare: %s, Invalid Client\n", __func__);
-		return;
+		return -EINVAL;
 	}
 
 	ret = hyp_assign_phys(memblock[client_id].phy_addr,
@@ -484,9 +484,10 @@ static void shared_hyp_mapping(int client_id)
 	if (ret != 0) {
 		pr_err("memshare: hyp_assign_phys failed size=%u err=%d\n",
 				memblock[client_id].size, ret);
-		return;
+		return ret;
 	}
 	memblock[client_id].hyp_mapping = 1;
+	return 0;
 }
 
 static int handle_alloc_req(void *req_h, void *req, void *conn_h)
@@ -538,6 +539,7 @@ static int handle_alloc_generic_req(void *req_h, void *req, void *conn_h)
 	int rc, resp = 0;
 	int client_id;
 	uint32_t size = 0;
+	bool mapping_failed = false;
 
 	mutex_lock(&memsh_drv->mem_share);
 	alloc_req = (struct mem_alloc_generic_req_msg_v01 *)req;
@@ -590,21 +592,38 @@ static int handle_alloc_generic_req(void *req_h, void *req, void *conn_h)
 	memblock[client_id].sequence_id = alloc_req->sequence_id;
 	memblock[client_id].alloc_request = 1;
 
-	fill_alloc_response(alloc_resp, client_id, &resp);
 	/*
 	 * Perform the Hypervisor mapping in order to avoid XPU viloation
 	 * to the allocated region for Modem Clients
 	 */
 	if (!memblock[client_id].hyp_mapping &&
-		memblock[client_id].allotted)
-		shared_hyp_mapping(client_id);
+		memblock[client_id].allotted) {
+		rc = shared_hyp_mapping(client_id);
+		if (IS_ENABLED(CONFIG_SEC_J8Y18LTE_PROJECT) && rc) {
+			/* Never advertise memory that firmware refused to share. */
+			mapping_failed = true;
+			resp = 1;
+			pr_err("memshare: J8 rejecting unassigned buffer client=%d err=%d\n",
+				client_id, rc);
+		}
+	}
+	fill_alloc_response(alloc_resp, client_id, &resp);
+	if (IS_ENABLED(CONFIG_SEC_J8Y18LTE_PROJECT) && resp) {
+		memblock[client_id].alloc_request = 0;
+		alloc_resp->dhms_mem_alloc_addr_info_valid = 0;
+		alloc_resp->dhms_mem_alloc_addr_info_len = 0;
+		memset(alloc_resp->dhms_mem_alloc_addr_info, 0,
+			sizeof(alloc_resp->dhms_mem_alloc_addr_info));
+		if (mapping_failed)
+			alloc_resp->resp.error = QMI_ERR_INTERNAL_V01;
+	}
 	mutex_unlock(&memsh_drv->mem_share);
 	pr_debug("memshare: alloc_resp.num_bytes :%d, alloc_resp.resp.result :%lx\n",
 			  alloc_resp->dhms_mem_alloc_addr_info[0].num_bytes,
 			  (unsigned long int)alloc_resp->resp.result);
 	rc = qmi_send_resp_from_cb(mem_share_svc_handle, conn_h, req_h,
 			&mem_share_svc_alloc_generic_resp_desc, alloc_resp,
-			sizeof(alloc_resp));
+			sizeof(*alloc_resp));
 
 	if (rc < 0)
 		pr_err("memshare: %s, Error sending the alloc request: %d\n",
