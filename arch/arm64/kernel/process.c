@@ -153,6 +153,9 @@ void machine_power_off(void)
  */
 void machine_restart(char *cmd)
 {
+	if (IS_ENABLED(CONFIG_SEC_J8Y18LTE_PROJECT))
+		pr_emerg("J8_RESET_REQUEST machine_restart pid=%d comm=%s\n",
+			current->pid, current->comm);
 	/* Disable interrupts first */
 	local_irq_disable();
 	smp_send_stop();

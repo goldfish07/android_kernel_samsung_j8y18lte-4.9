@@ -18,6 +18,7 @@
 #include "internal.h"
 
 #include <asm/ioctls.h>
+#include "j8_ioctl_diag.h"
 
 /* So that the fiemap access checks can't overflow on 32 bit machines. */
 #define FIEMAP_MAX_EXTENTS	(UINT_MAX / sizeof(struct fiemap_extent))
@@ -686,12 +687,15 @@ SYSCALL_DEFINE3(ioctl, unsigned int, fd, unsigned int, cmd, unsigned long, arg)
 {
 	int error;
 	struct fd f = fdget(fd);
+	unsigned int j8_seq;
 
 	if (!f.file)
 		return -EBADF;
+	j8_seq = j8_ioctl_begin(f.file, cmd, false);
 	error = security_file_ioctl(f.file, cmd, arg);
 	if (!error)
 		error = do_vfs_ioctl(f.file, fd, cmd, arg);
+	j8_ioctl_end(j8_seq, error);
 	fdput(f);
 	return error;
 }

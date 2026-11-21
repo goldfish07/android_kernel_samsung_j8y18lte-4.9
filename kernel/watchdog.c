@@ -38,7 +38,9 @@ unsigned long __read_mostly watchdog_enabled = SOFT_WATCHDOG_ENABLED;
 int __read_mostly nmi_watchdog_enabled;
 int __read_mostly soft_watchdog_enabled;
 int __read_mostly watchdog_user_enabled;
-int __read_mostly watchdog_thresh = 10;
+/* J8 bring-up: report a CPU stall before the platform watchdog expires. */
+int __read_mostly watchdog_thresh =
+	IS_ENABLED(CONFIG_SEC_J8Y18LTE_PROJECT) ? 3 : 10;
 
 #ifdef CONFIG_SMP
 int __read_mostly sysctl_softlockup_all_cpu_backtrace;

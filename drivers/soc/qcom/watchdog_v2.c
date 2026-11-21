@@ -11,11 +11,11 @@
  */
 
 #include <linux/module.h>
+#include <linux/jiffies.h>
 #include <linux/kernel.h>
 #include <linux/io.h>
 #include <linux/delay.h>
 #include <linux/slab.h>
-#include <linux/jiffies.h>
 #include <linux/kthread.h>
 #include <linux/mutex.h>
 #include <linux/sched.h>
@@ -423,6 +423,18 @@ static void keep_alive_response(void *info)
  * If this function does not return, it implies one of the
  * other cpu's is not responsive.
  */
+/* Temporary logging around the existing J8 watchdog path; timeouts stay intact. */
+static bool j8_wdog_diag_active(void)
+{
+	unsigned long boot_ticks;
+
+	if (!IS_ENABLED(CONFIG_SEC_J8Y18LTE_PROJECT))
+		return false;
+	boot_ticks = jiffies - INITIAL_JIFFIES;
+	return boot_ticks >= 35UL * HZ &&
+		boot_ticks < 1800UL * HZ;
+}
+
 static void ping_other_cpus(struct msm_watchdog_data *wdog_dd)
 {
 	int cpu;
@@ -431,9 +443,14 @@ static void ping_other_cpus(struct msm_watchdog_data *wdog_dd)
 	/* Make sure alive mask is cleared and set in order */
 	smp_mb();
 	for_each_cpu(cpu, cpu_online_mask) {
-		if (!cpu_idle_pc_state[cpu] && !cpu_isolated(cpu))
+		if (!cpu_idle_pc_state[cpu] && !cpu_isolated(cpu)) {
+			if (j8_wdog_diag_active())
+				pr_err("J8_RESET_WDOG ping begin cpu=%d\n", cpu);
 			smp_call_function_single(cpu, keep_alive_response,
 						 wdog_dd, 1);
+			if (j8_wdog_diag_active())
+				pr_err("J8_RESET_WDOG ping end cpu=%d\n", cpu);
+		}
 	}
 }
 
@@ -459,6 +476,9 @@ static __ref int watchdog_kthread(void *arg)
 			wdog_dd->timer_expired) != 0)
 			;
 
+		if (j8_wdog_diag_active())
+			pr_err("J8_RESET_WDOG timer woke thread user_gate=%u\n",
+				wdog_dd->user_pet_complete);
 		if (wdog_dd->do_ipi_ping)
 			ping_other_cpus(wdog_dd);
 
@@ -472,7 +492,11 @@ static __ref int watchdog_kthread(void *arg)
 
 		if (enable) {
 			delay_time = msecs_to_jiffies(wdog_dd->pet_time);
+			if (j8_wdog_diag_active())
+				pr_err("J8_RESET_WDOG pet begin\n");
 			pet_watchdog(wdog_dd);
+			if (j8_wdog_diag_active())
+				pr_err("J8_RESET_WDOG pet end\n");
 		}
 		/* Check again before scheduling
 		 * Could have been changed on other cpu
@@ -555,6 +579,9 @@ static irqreturn_t wdog_bark_handler(int irq, void *dev_id)
 	unsigned long nanosec_rem;
 	unsigned long long t = sched_clock();
 
+	if (IS_ENABLED(CONFIG_SEC_J8Y18LTE_PROJECT))
+		pr_emerg("J8_RESET_WDOG bark entered irq=%d last_pet=%llu now=%llu\n",
+			irq, wdog_dd->last_pet, t);
 	sec_debug_prepare_for_wdog_bark_reset();
 
 	nanosec_rem = do_div(t, 1000000000);

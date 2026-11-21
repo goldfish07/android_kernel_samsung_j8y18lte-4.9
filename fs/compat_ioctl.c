@@ -113,6 +113,7 @@
 #include <linux/dvb/video.h>
 
 #include <linux/sort.h>
+#include "j8_ioctl_diag.h"
 
 #ifdef CONFIG_SPARC
 #include <asm/fbio.h>
@@ -1551,8 +1552,10 @@ COMPAT_SYSCALL_DEFINE3(ioctl, unsigned int, fd, unsigned int, cmd,
 	unsigned long arg = arg32;
 	struct fd f = fdget(fd);
 	int error = -EBADF;
+	unsigned int j8_seq;
 	if (!f.file)
 		goto out;
+	j8_seq = j8_ioctl_begin(f.file, cmd, true);
 
 	/* RED-PEN how should LSM module know it's handling 32bit? */
 	error = security_file_ioctl(f.file, cmd, arg);
@@ -1623,6 +1626,7 @@ COMPAT_SYSCALL_DEFINE3(ioctl, unsigned int, fd, unsigned int, cmd,
  do_ioctl:
 	error = do_vfs_ioctl(f.file, fd, cmd, arg);
  out_fput:
+	j8_ioctl_end(j8_seq, error);
 	fdput(f);
  out:
 	return error;
