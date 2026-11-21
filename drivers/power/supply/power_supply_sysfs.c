@@ -46,23 +46,27 @@ static ssize_t power_supply_show_property(struct device *dev,
 					  char *buf) {
 	/* HS60 add for SR-ZQL1871-01-299 OTG psy by wangzikang at 2019/10/29 start */
 	#if !defined(HQ_FACTORY_BUILD)	//ss version
-	static char *type_text[] = {
+	static char *type_text[POWER_SUPPLY_TYPE_MAX] = {
 		"Unknown", "Battery", "UPS", "Mains", "USB", "USB_DCP",
 		"USB_CDP", "USB_ACA", "USB_HVDCP", "USB_HVDCP_3", "USB_PD",
 		"Wireless", "USB_FLOAT", "BMS", "Parallel", "Main", "Wipower",
 		/*HS70 add for HS70-919 enable AFC function by qianyingdong at 2019/11/18 start*/
 		"TYPEC", "TYPEC_UFP", "TYPEC_DFP","OTG",
 		#if defined(CONFIG_AFC)
-		"AFC"
+		"AFC",
 		#endif
 		/*HS70 add for HS70-919 enable AFC function by qianyingdong at 2019/11/18 start*/
+		[POWER_SUPPLY_TYPE_POWER_SHARING] = "Power sharing",
+		[POWER_SUPPLY_TYPE_POGO] = "Pogo",
 	};
 	#else
-	static char *type_text[] = {
+	static char *type_text[POWER_SUPPLY_TYPE_MAX] = {
 		"Unknown", "Battery", "UPS", "Mains", "USB", "USB_DCP",
 		"USB_CDP", "USB_ACA", "USB_HVDCP", "USB_HVDCP_3", "USB_PD",
 		"Wireless", "USB_FLOAT", "BMS", "Parallel", "Main", "Wipower",
-		"TYPEC", "TYPEC_UFP", "TYPEC_DFP"
+		"TYPEC", "TYPEC_UFP", "TYPEC_DFP",
+		[POWER_SUPPLY_TYPE_POWER_SHARING] = "Power sharing",
+		[POWER_SUPPLY_TYPE_POGO] = "Pogo",
 	};
 	#endif
 	/* HS60 add for SR-ZQL1871-01-299 OTG psy by wangzikang at 2019/10/29 end */
@@ -88,7 +92,8 @@ static ssize_t power_supply_show_property(struct device *dev,
 		"Unknown", "Good", "Overheat", "Dead", "Over voltage",
 		"Unspecified failure", "Cold", "Watchdog timer expire",
 		"Safety timer expire",
-		"Warm", "Cool", "Hot"
+		"Warm", "Cool", "Hot", "Under voltage", "Overheat limit",
+		"Vsys over voltage", "Vbat over voltage"
 	};
 	static char *technology_text[] = {
 		"Unknown", "NiMH", "Li-ion", "Li-poly", "LiFe", "NiCd",
@@ -431,6 +436,15 @@ static struct device_attribute power_supply_attrs[] = {
 	POWER_SUPPLY_ATTR(batt_id_error),
 	/*HS60 & HS70 add for HS60-3421 by wangzikang at 2019/10/31 end*/
 	POWER_SUPPLY_ATTR(real_capacity),
+	/* Samsung J8 integer properties. */
+	POWER_SUPPLY_ATTR(afc_charger_mode),
+	POWER_SUPPLY_ATTR(charge_aicl_control),
+	POWER_SUPPLY_ATTR(charge_otg_control),
+	POWER_SUPPLY_ATTR(charge_powered_otg_control),
+	POWER_SUPPLY_ATTR(charge_uno_control),
+	POWER_SUPPLY_ATTR(current_full),
+	POWER_SUPPLY_ATTR(filter_cfg),
+	POWER_SUPPLY_ATTR(power_design),
 	/* Local extensions of type int64_t */
 	POWER_SUPPLY_ATTR(charge_counter_ext),
 	/* Properties of type `const char *' */
@@ -485,6 +499,7 @@ void power_supply_init_attrs(struct device_type *dev_type)
 {
 	int i;
 
+	BUILD_BUG_ON(ARRAY_SIZE(power_supply_attrs) != POWER_SUPPLY_PROP_MAX);
 	dev_type->groups = power_supply_attr_groups;
 
 	for (i = 0; i < ARRAY_SIZE(power_supply_attrs); i++)

@@ -75,6 +75,9 @@ enum {
 	POWER_SUPPLY_HEALTH_WARM,
 	POWER_SUPPLY_HEALTH_COOL,
 	POWER_SUPPLY_HEALTH_HOT,
+	POWER_SUPPLY_HEALTH_UNDERVOLTAGE,
+	POWER_SUPPLY_HEALTH_OVERHEATLIMIT,
+	POWER_SUPPLY_HEALTH_MAX,
 };
 
 enum {
@@ -362,6 +365,15 @@ enum power_supply_property {
 	POWER_SUPPLY_PROP_BATT_ID_ERROR,
 	/*HS60 & HS70 add for HS60-3421 by wangzikang at 2019/10/31 end */
 	POWER_SUPPLY_PROP_REAL_CAPACITY,
+	/* Samsung J8 integer properties. Keep before the string-property range. */
+	POWER_SUPPLY_PROP_AFC_CHARGER_MODE,
+	POWER_SUPPLY_PROP_CHARGE_AICL_CONTROL,
+	POWER_SUPPLY_PROP_CHARGE_OTG_CONTROL,
+	POWER_SUPPLY_PROP_CHARGE_POWERED_OTG_CONTROL,
+	POWER_SUPPLY_PROP_CHARGE_UNO_CONTROL,
+	POWER_SUPPLY_PROP_CURRENT_FULL,
+	POWER_SUPPLY_PROP_FILTER_CFG,
+	POWER_SUPPLY_PROP_POWER_DESIGN,
 	/* Local extensions of type int64_t */
 	POWER_SUPPLY_PROP_CHARGE_COUNTER_EXT,
 	/* Properties of type `const char *' */
@@ -370,6 +382,8 @@ enum power_supply_property {
 	POWER_SUPPLY_PROP_SERIAL_NUMBER,
 	POWER_SUPPLY_PROP_BATTERY_TYPE,
 	POWER_SUPPLY_PROP_CYCLE_COUNTS,
+	POWER_SUPPLY_PROP_MAX,
+	POWER_SUPPLY_EXT_PROP_MAX = POWER_SUPPLY_PROP_MAX + 256,
 };
 
 enum power_supply_type {
@@ -407,8 +421,13 @@ enum power_supply_type {
 	#endif
 	/*HS70 add for HS70-919 enable AFC function by qianyingdong at 2019/11/18 end*/
 
+	POWER_SUPPLY_TYPE_POWER_SHARING,
+	POWER_SUPPLY_TYPE_POGO,
+	POWER_SUPPLY_TYPE_MAX,
 };
+#define POWER_SUPPLY_TYPE_OTG POWER_SUPPLY_TYPE_USB_OTG
 
+#if !defined(CONFIG_SEC_J8Y18LTE_PROJECT)
 /* HS60 add for SR-ZQL1695-01000000455 Provide sysFS node named /sys/class/power_supply/battery/batt_current_event by gaochao at 2019/08/08 start */
 #if !defined(HQ_FACTORY_BUILD)	//ss version
 enum batt_current_event_ss {
@@ -433,6 +452,8 @@ enum batt_misc_event_ss {
 };
 #endif
 /* HS60 add for SR-ZQL1695-01000000460 Provide sysFS node named /sys/class/power_supply/battery/batt_misc_event by gaochao at 2019/08/11 end */
+#endif
+
 
 #if !defined(HQ_FACTORY_BUILD)	//ss version
 #define BATTERY_HEALTH_SHIFT                16

@@ -180,6 +180,8 @@ source "drivers/irqchip/Kconfig"
 
 source "drivers/ipack/Kconfig"
 
+source "drivers/battery_v2/Kconfig"
+
 source "drivers/reset/Kconfig"
 
 source "drivers/fmc/Kconfig"
@@ -197,6 +199,8 @@ source "drivers/ras/Kconfig"
 source "drivers/thunderbolt/Kconfig"
 
 source "drivers/android/Kconfig"
+
+source "drivers/muic/Kconfig"
 
 source "drivers/nvdimm/Kconfig"
 
