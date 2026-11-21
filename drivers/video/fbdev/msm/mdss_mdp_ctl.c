@@ -28,6 +28,10 @@
 #include "mdss_mdp_trace.h"
 #include "mdss_debug.h"
 
+#if defined(CONFIG_SEC_J8Y18LTE_PROJECT) && defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
+#include "samsung/ss_dsi_panel_common.h"
+#endif
+
 #define MDSS_MDP_QSEED3_VER_DOWNSCALE_LIM 2
 #define NUM_MIXERCFG_REGS 3
 #define MDSS_MDP_WB_OUTPUT_BPP	3
@@ -5536,6 +5540,47 @@ static void mdss_mdp_force_border_color(struct mdss_mdp_ctl *ctl)
 		ctl->mixer_right->params_changed++;
 }
 
+#if defined(CONFIG_SEC_J8Y18LTE_PROJECT) && defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
+static int mdss_mdp_j8_panel_init_before_commit(struct mdss_mdp_ctl *ctl)
+{
+	struct samsung_display_driver_data *vdd;
+	struct mdss_dsi_ctrl_pdata *ctrl;
+	int ret;
+
+	if (ctl->intf_type != MDSS_INTF_DSI || !ctl->panel_data ||
+		ctl->panel_data->panel_info.type != MIPI_VIDEO_PANEL)
+		return 0;
+
+	vdd = samsung_get_vdd();
+	if (IS_ERR_OR_NULL(vdd))
+		return -EINVAL;
+	if (!vdd->init_panel_before_commit)
+		return 0;
+
+	ctrl = container_of(ctl->panel_data, struct mdss_dsi_ctrl_pdata,
+			panel_data);
+	/* The J8 panel requests this sequence even during splash handoff. */
+	ret = mdss_mdp_ctl_intf_event(ctl, MDSS_EVENT_LINK_READY, NULL,
+			CTL_INTF_EVENT_FLAG_DEFAULT);
+	if (ret)
+		return ret;
+	ret = mdss_mdp_ctl_intf_event(ctl, MDSS_EVENT_UNBLANK, NULL,
+			CTL_INTF_EVENT_FLAG_DEFAULT);
+	if (ret)
+		return ret;
+	if (ctrl->on_cmds.link_state == DSI_HS_MODE) {
+		ret = mdss_mdp_ctl_intf_event(ctl, MDSS_EVENT_PANEL_ON, NULL,
+				CTL_INTF_EVENT_FLAG_DEFAULT);
+		if (ret)
+			return ret;
+	}
+
+	vdd->init_panel_before_commit = false;
+	pr_info("J8 panel initialization before first commit complete\n");
+	return 0;
+}
+#endif
+
 int mdss_mdp_display_commit(struct mdss_mdp_ctl *ctl, void *arg,
 	struct mdss_mdp_commit_cb *commit_cb)
 {
@@ -5786,6 +5831,13 @@ int mdss_mdp_display_commit(struct mdss_mdp_ctl *ctl, void *arg,
 	    !bitmap_empty(mdata->bwc_enable_map, MAX_DRV_SUP_PIPES))
 		mdss_mdp_bwcpanic_ctrl(mdata, true);
 
+#if defined(CONFIG_SEC_J8Y18LTE_PROJECT) && defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
+	ret = mdss_mdp_j8_panel_init_before_commit(ctl);
+	if (ret) {
+		pr_err_ratelimited("J8 panel initialization failed: %d\n", ret);
+		goto done;
+	}
+#endif
 	ATRACE_BEGIN("flush_kickoff");
 
 	MDSS_XLOG(ctl->intf_num, ctl_flush_bits, sctl_flush_bits,

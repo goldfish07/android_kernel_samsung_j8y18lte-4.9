@@ -58,6 +58,10 @@
 
 #include "mdss_mdp_trace.h"
 
+#if defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
+#include "samsung/ss_dsi_panel_common.h"
+#endif
+
 #define AXI_HALT_TIMEOUT_US	0x4000
 #define AUTOSUSPEND_TIMEOUT_MS	200
 #define DEFAULT_MDP_PIPE_WIDTH	2048
@@ -3007,6 +3011,11 @@ static int mdss_mdp_probe(struct platform_device *pdev)
 			sizeof(u32), GFP_KERNEL);
 	if (mdss_res->mdp_irq_mask == NULL)
 		return -ENOMEM;
+
+#if defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
+	if (!mdss_panel_attached(DISPLAY_1) && !mdss_panel_attached(DISPLAY_2))
+		mdata->handoff_pending = false;
+#endif
 
 	pr_info("mdss version = 0x%x, bootloader display is %s, num %d, intf_sel=0x%08x\n",
 		mdata->mdp_rev, num_of_display_on ? "on" : "off",

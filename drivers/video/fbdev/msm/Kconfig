@@ -152,4 +152,6 @@ config LCD_SORTING
 
 		  If unusre, say N.
 
+
+source "drivers/video/fbdev/msm/samsung/Kconfig"
 endif

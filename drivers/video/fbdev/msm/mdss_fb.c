@@ -52,6 +52,10 @@
 #include "mdss_debug.h"
 #include "mdss_smmu.h"
 #include "mdss_mdp.h"
+
+#if defined(CONFIG_SEC_J8Y18LTE_PROJECT) && defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
+#include "samsung/ss_dsi_panel_common.h"
+#endif
 #include "mdp3_ctrl.h"
 #include "mdss_sync.h"
 
@@ -2040,6 +2044,9 @@ static int mdss_fb_blank_sub(int blank_mode, struct fb_info *info,
 	int ret = 0;
 	int cur_power_state, req_power_state = MDSS_PANEL_POWER_OFF;
 	char trace_buffer[32];
+#if defined(CONFIG_SEC_J8Y18LTE_PROJECT) && defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
+	struct samsung_display_driver_data *vdd = samsung_get_vdd();
+#endif
 
 	if (!mfd || !op_enable)
 		return -EPERM;
@@ -2083,6 +2090,14 @@ static int mdss_fb_blank_sub(int blank_mode, struct fb_info *info,
 		}
 	}
 
+#if defined(CONFIG_SEC_J8Y18LTE_PROJECT) && defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
+	if (!IS_ERR_OR_NULL(vdd) && info->node >= 0 &&
+		info->node < SUPPORT_PANEL_COUNT) {
+		mutex_lock(&vdd->vdd_blank_unblank_lock);
+		vdd->vdd_blank_mode[info->node] = blank_mode;
+		mutex_unlock(&vdd->vdd_blank_unblank_lock);
+	}
+#endif
 	switch (blank_mode) {
 	case FB_BLANK_UNBLANK:
 		pr_debug("unblank called. cur pwr state=%d\n", cur_power_state);
