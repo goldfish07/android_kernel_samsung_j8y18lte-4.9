@@ -127,6 +127,16 @@ static void cluster_prepare(struct lpm_cluster *cluster,
 static bool print_parsed_dt;
 module_param_named(print_parsed_dt, print_parsed_dt, bool, 0664);
 
+/* J8 bring-up: firmware collapse modes remain unvalidated on this port. */
+static bool j8_wfi_only = IS_ENABLED(CONFIG_SEC_J8Y18LTE_PROJECT);
+module_param_named(j8_wfi_only, j8_wfi_only, bool, 0644);
+MODULE_PARM_DESC(j8_wfi_only, "J8 bring-up: use WFI idle and reject system suspend");
+
+static bool j8_force_wfi(void)
+{
+	return IS_ENABLED(CONFIG_SEC_J8Y18LTE_PROJECT) && READ_ONCE(j8_wfi_only);
+}
+
 static bool sleep_disabled;
 module_param_named(sleep_disabled, sleep_disabled, bool, 0664);
 
@@ -1370,6 +1380,9 @@ static int lpm_cpuidle_select(struct cpuidle_driver *drv,
 {
 	struct lpm_cpu *cpu = per_cpu(cpu_lpm, dev->cpu);
 
+	if (j8_force_wfi())
+		return 0;
+
 	if (!cpu)
 		return 0;
 
@@ -1419,6 +1432,16 @@ static int lpm_cpuidle_enter(struct cpuidle_device *dev,
 	ktime_t start = ktime_get();
 	uint64_t start_time = ktime_to_ns(start), end_time;
 
+	if (j8_force_wfi()) {
+		trace_cpu_idle_enter(0);
+		psci_enter_sleep(cpu, 0, true);
+		dev->last_residency =
+			(ktime_to_ns(ktime_get()) - start_time) / NSEC_PER_USEC;
+		trace_cpu_idle_exit(0, true);
+		local_irq_enable();
+		return 0;
+	}
+
 	cpu_prepare(cpu, idx, true);
 	cluster_prepare(cpu->parent, cpumask, idx, true, start_time);
 
@@ -1458,6 +1481,11 @@ static void lpm_cpuidle_freeze(struct cpuidle_device *dev,
 	struct lpm_cpu *cpu = per_cpu(cpu_lpm, dev->cpu);
 	const struct cpumask *cpumask = get_cpu_mask(dev->cpu);
 	bool success = false;
+
+	if (j8_force_wfi()) {
+		psci_enter_sleep(cpu, 0, false);
+		return;
+	}
 
 	for (; idx >= 0; idx--) {
 		if (lpm_cpu_mode_allow(dev->cpu, idx, false))
@@ -1708,9 +1736,16 @@ static int lpm_suspend_enter(suspend_state_t state)
 	return 0;
 }
 
+static int lpm_suspend_valid(suspend_state_t state)
+{
+	if (j8_force_wfi())
+		return 0;
+	return suspend_valid_only_mem(state);
+}
+
 static const struct platform_suspend_ops lpm_suspend_ops = {
 	.enter = lpm_suspend_enter,
-	.valid = suspend_valid_only_mem,
+	.valid = lpm_suspend_valid,
 	.prepare_late = lpm_suspend_prepare,
 	.wake = lpm_suspend_wake,
 };
@@ -1748,6 +1783,8 @@ static int lpm_probe(struct platform_device *pdev)
 	 * how late lpm_levels gets initialized.
 	 */
 	suspend_set_ops(&lpm_suspend_ops);
+	if (j8_force_wfi())
+		pr_err("J8 safe idle: WFI only; system suspend disabled for bring-up\n");
 	freeze_set_ops(&lpm_freeze_ops);
 	hrtimer_init(&lpm_hrtimer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 	for_each_possible_cpu(cpu) {
