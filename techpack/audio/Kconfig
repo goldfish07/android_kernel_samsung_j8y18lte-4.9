@@ -1,0 +1,77 @@
+config QCOM_J8_AUDIO
+	bool "J8 Qualcomm audio stack from M11 Platform source"
+	depends on SEC_J8Y18LTE_PROJECT && SND_SOC=y
+	select MSM_CDC_PINCTRL
+	help
+	  Build the SDM450 DSP, ASoC machine and PMIC codec drivers into
+	  the J8 kernel so the existing vendor audio HAL can find a card.
+
+config SND_SOC_SDM450
+	bool
+	default y if QCOM_J8_AUDIO
+
+config SND_SOC_QDSP6V2
+	bool
+	default y if QCOM_J8_AUDIO
+
+config SND_SOC_MSM_QDSP6V2_INTF
+	bool
+	default y if QCOM_J8_AUDIO
+
+config SND_SOC_MSM_HOSTLESS_PCM
+	bool
+	default y if QCOM_J8_AUDIO
+
+config SND_SOC_MSM_STUB
+	bool
+	default y if QCOM_J8_AUDIO
+
+config MSM_QDSP6_APRV2
+	bool
+	default y if QCOM_J8_AUDIO
+
+config MSM_ADSP_LOADER
+	bool
+	default y if QCOM_J8_AUDIO
+
+config MSM_QDSP6_NOTIFIER
+	bool
+	default y if QCOM_J8_AUDIO
+
+config MSM_QDSP6_SSR
+	bool
+	default y if QCOM_J8_AUDIO
+
+config SND_SOC_SDM660_CDC
+	bool
+	default y if QCOM_J8_AUDIO
+
+config SND_SOC_ANALOG_CDC
+	bool
+	default y if QCOM_J8_AUDIO
+
+config SND_SOC_DIGITAL_CDC_LEGACY
+	bool
+	default y if QCOM_J8_AUDIO
+
+config SND_SOC_WCD_MBHC
+	bool
+	# Stock J8 uses CONFIG_SAMSUNG_JACK, whose driver is not yet ported.
+	default n
+
+config SND_SOC_WCD_MBHC_LEGACY
+	bool
+	default n
+
+config SND_SOC_WCD9XXX_V2
+	bool
+	default y if QCOM_J8_AUDIO
+
+config AUDIO_EXT_CLK
+	bool
+	default y if QCOM_J8_AUDIO
+
+config SND_HWDEP_ROUTING
+	bool
+	default y if QCOM_J8_AUDIO
+
