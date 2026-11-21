@@ -2773,6 +2773,8 @@ static int arm_smmu_map(struct iommu_domain *domain, unsigned long iova,
 	unsigned long flags;
 	struct arm_smmu_domain *smmu_domain = to_smmu_domain(domain);
 	struct io_pgtable_ops *ops= smmu_domain->pgtbl_ops;
+	bool map_powered = IS_ENABLED(CONFIG_SEC_J8Y18LTE_PROJECT) &&
+		smmu_domain->cfg.fmt == ARM_SMMU_CTX_FMT_AARCH32_S;
 	LIST_HEAD(nonsecure_pool);
 
 	if (!ops)
@@ -2780,6 +2782,14 @@ static int arm_smmu_map(struct iommu_domain *domain, unsigned long iova,
 
 	if (arm_smmu_is_slave_side_secure(smmu_domain))
 		return msm_secure_smmu_map(domain, iova, paddr, size, prot);
+
+	/* Short-descriptor table-to-block replacement can invalidate TLBs on map. */
+	if (map_powered) {
+		ret = arm_smmu_domain_power_on(domain, smmu_domain->smmu);
+		if (ret)
+			return ret;
+		pr_info_once("J8 display: short-descriptor map power guard active\n");
+	}
 
 	arm_smmu_prealloc_memory(smmu_domain, size, &nonsecure_pool);
 	arm_smmu_secure_domain_lock(smmu_domain);
@@ -2794,6 +2804,8 @@ static int arm_smmu_map(struct iommu_domain *domain, unsigned long iova,
 	arm_smmu_secure_domain_unlock(smmu_domain);
 
 	arm_smmu_release_prealloc_memory(smmu_domain, &nonsecure_pool);
+	if (map_powered)
+		arm_smmu_domain_power_off(domain, smmu_domain->smmu);
 	return ret;
 }
 
@@ -2863,6 +2875,8 @@ static size_t arm_smmu_map_sg(struct iommu_domain *domain, unsigned long iova,
 	unsigned int idx_start, idx_end;
 	struct scatterlist *sg_start, *sg_end;
 	unsigned long __saved_iova_start;
+	bool map_powered = IS_ENABLED(CONFIG_SEC_J8Y18LTE_PROJECT) &&
+		smmu_domain->cfg.fmt == ARM_SMMU_CTX_FMT_AARCH32_S;
 	LIST_HEAD(nonsecure_pool);
 
 	if (!ops)
@@ -2870,6 +2884,14 @@ static size_t arm_smmu_map_sg(struct iommu_domain *domain, unsigned long iova,
 
 	if (arm_smmu_is_slave_side_secure(smmu_domain))
 		return msm_secure_smmu_map_sg(domain, iova, sg, nents, prot);
+
+	/* Short-descriptor table-to-block replacement can invalidate TLBs on map. */
+	if (map_powered) {
+		ret = arm_smmu_domain_power_on(domain, smmu_domain->smmu);
+		if (ret)
+			return 0;
+		pr_info_once("J8 display: short-descriptor map power guard active\n");
+	}
 
 	arm_smmu_prealloc_memory_sg(smmu_domain, sg, nents, &nonsecure_pool);
 	arm_smmu_secure_domain_lock(smmu_domain);
@@ -2915,6 +2937,8 @@ out:
 	}
 	arm_smmu_secure_domain_unlock(smmu_domain);
 	arm_smmu_release_prealloc_memory(smmu_domain, &nonsecure_pool);
+	if (map_powered)
+		arm_smmu_domain_power_off(domain, smmu_domain->smmu);
 	return iova - __saved_iova_start;
 }
 
