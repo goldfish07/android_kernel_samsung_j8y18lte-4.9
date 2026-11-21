@@ -1993,6 +1993,25 @@ static int arm_smmu_init_domain_context(struct iommu_domain *domain,
 			       ARM_SMMU_FEAT_FMT_AARCH64_4K)))
 		cfg->fmt = ARM_SMMU_CTX_FMT_AARCH64;
 
+	/*
+	 * J8's 3.18 MDP driver uses ARMv7 short descriptors. Its firmware
+	 * rejects SMMU_CHANGE_PAGETABLE_FORMAT for the nonsecure display CB.
+	 * Preserve that client's working format while retaining translation;
+	 * GPU and secure-display domains keep the normal format selection.
+	 */
+	if (IS_ENABLED(CONFIG_SEC_J8Y18LTE_PROJECT) &&
+	    of_device_is_compatible(dev->of_node, "qcom,smmu_mdp_unsec")) {
+		if (!IS_ENABLED(CONFIG_IOMMU_IO_PGTABLE_ARMV7S) ||
+		    !(smmu->features & ARM_SMMU_FEAT_FMT_AARCH32_S) ||
+		    smmu_domain->stage != ARM_SMMU_DOMAIN_S1) {
+			dev_err(dev, "J8 display requires ARMv7 short descriptors\n");
+			ret = -EOPNOTSUPP;
+			goto out_unlock;
+		}
+		cfg->fmt = ARM_SMMU_CTX_FMT_AARCH32_S;
+		dev_info(dev, "J8 display: ARMv7 short-descriptor mappings\n");
+	}
+
 	if (cfg->fmt == ARM_SMMU_CTX_FMT_NONE) {
 		ret = -EINVAL;
 		goto out_unlock;

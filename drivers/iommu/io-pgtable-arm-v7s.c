@@ -37,8 +37,10 @@
 #include <linux/iommu.h>
 #include <linux/kernel.h>
 #include <linux/kmemleak.h>
+#include <linux/mm.h>
 #include <linux/sizes.h>
 #include <linux/slab.h>
+#include <linux/scatterlist.h>
 #include <linux/types.h>
 
 #include <asm/barrier.h>
@@ -442,6 +444,12 @@ static int arm_v7s_map(struct io_pgtable_ops *ops, unsigned long iova,
 	if (!(prot & (IOMMU_READ | IOMMU_WRITE)))
 		return 0;
 
+	if (iova >= BIT_ULL(32) || size > BIT_ULL(32) - iova)
+		return -EINVAL;
+	if (!(iop->cfg.quirks & IO_PGTABLE_QUIRK_ARM_MTK_4GB) &&
+	    (paddr >= BIT_ULL(32) || size > BIT_ULL(32) - paddr))
+		return -EINVAL;
+
 	ret = __arm_v7s_map(data, iova, paddr, size, prot, 1, data->pgd);
 	/*
 	 * Synchronise all PTE updates for the new mapping before there's
@@ -456,6 +464,50 @@ static int arm_v7s_map(struct io_pgtable_ops *ops, unsigned long iova,
 	}
 
 	return ret;
+}
+
+static int arm_v7s_map_sg(struct io_pgtable_ops *ops, unsigned long iova,
+			 struct scatterlist *sg, unsigned int nents,
+			 int prot, size_t *size)
+{
+	struct arm_v7s_io_pgtable *data = io_pgtable_ops_to_data(ops);
+	unsigned long bitmap = data->iop.cfg.pgsize_bitmap;
+	unsigned int min_pagesz = 1U << __ffs(bitmap);
+	struct scatterlist *s;
+	size_t mapped = 0;
+	unsigned int i;
+
+	*size = 0;
+	if (!(prot & (IOMMU_READ | IOMMU_WRITE)) ||
+	    !IS_ALIGNED(iova, min_pagesz))
+		return 0;
+
+	for_each_sg(sg, s, nents, i) {
+		phys_addr_t phys = sg_phys(s);
+		size_t remaining = s->length;
+
+		if (!IS_ALIGNED(phys, min_pagesz) ||
+		    !IS_ALIGNED(remaining, min_pagesz))
+			goto fail;
+
+		while (remaining) {
+			size_t pgsize = iommu_pgsize(bitmap, iova | phys, remaining);
+
+			if (mapped > INT_MAX - pgsize ||
+			    ops->map(ops, iova, phys, pgsize, prot))
+				goto fail;
+			iova += pgsize;
+			phys += pgsize;
+			mapped += pgsize;
+			remaining -= pgsize;
+		}
+	}
+	return mapped;
+
+fail:
+	/* The SMMU caller owns rollback of the successfully mapped prefix. */
+	*size = mapped;
+	return 0;
 }
 
 static void arm_v7s_free_pgtable(struct io_pgtable *iop)
@@ -598,33 +650,82 @@ static int __arm_v7s_unmap(struct arm_v7s_io_pgtable *data,
 	return __arm_v7s_unmap(data, iova, size, lvl + 1, ptep);
 }
 
-static int arm_v7s_unmap(struct io_pgtable_ops *ops, unsigned long iova,
+static size_t arm_v7s_unmap(struct io_pgtable_ops *ops, unsigned long iova,
 			 size_t size)
 {
 	struct arm_v7s_io_pgtable *data = io_pgtable_ops_to_data(ops);
-	size_t unmapped;
+	size_t unmapped = 0;
 
-	unmapped = __arm_v7s_unmap(data, iova, size, 1, data->pgd);
+	while (unmapped < size) {
+		size_t pgsize = iommu_pgsize(data->iop.cfg.pgsize_bitmap,
+					  iova, size - unmapped);
+		size_t ret = __arm_v7s_unmap(data, iova, pgsize, 1, data->pgd);
+
+		if (!ret)
+			break;
+		unmapped += ret;
+		iova += ret;
+	}
 	if (unmapped)
 		io_pgtable_tlb_sync(&data->iop);
 
 	return unmapped;
 }
 
+static arm_v7s_iopte arm_v7s_get_pte(struct arm_v7s_io_pgtable *data,
+				   unsigned long iova, int *level)
+{
+	arm_v7s_iopte *ptep = data->pgd, pte;
+	int lvl;
+
+	if (iova >= BIT_ULL(32))
+		return 0;
+	for (lvl = 1; lvl <= 2; lvl++) {
+		pte = ptep[ARM_V7S_LVL_IDX(iova, lvl)];
+		if (!ARM_V7S_PTE_IS_VALID(pte))
+			return 0;
+		if (!ARM_V7S_PTE_IS_TABLE(pte, lvl)) {
+			*level = lvl;
+			return pte;
+		}
+		ptep = iopte_deref(pte, lvl);
+	}
+	return 0;
+}
+
+static uint64_t arm_v7s_iova_get_pte(struct io_pgtable_ops *ops,
+				  unsigned long iova)
+{
+	int lvl;
+
+	return arm_v7s_get_pte(io_pgtable_ops_to_data(ops), iova, &lvl);
+}
+
+static bool arm_v7s_is_iova_coherent(struct io_pgtable_ops *ops,
+				   unsigned long iova)
+{
+	arm_v7s_iopte pte;
+	int lvl;
+
+	pte = arm_v7s_get_pte(io_pgtable_ops_to_data(ops), iova, &lvl);
+	if (!pte)
+		return false;
+	if (arm_v7s_pte_is_cont(pte, lvl))
+		pte = arm_v7s_cont_to_pte(pte, lvl);
+	return (arm_v7s_pte_to_prot(pte, lvl) & IOMMU_CACHE) &&
+	       ((pte >> ARM_V7S_ATTR_SHIFT(lvl)) & ARM_V7S_ATTR_S);
+}
+
 static phys_addr_t arm_v7s_iova_to_phys(struct io_pgtable_ops *ops,
 					unsigned long iova)
 {
 	struct arm_v7s_io_pgtable *data = io_pgtable_ops_to_data(ops);
-	arm_v7s_iopte *ptep = data->pgd, pte;
-	int lvl = 0;
+	arm_v7s_iopte pte;
+	int lvl;
 	u32 mask;
 
-	do {
-		pte = ptep[ARM_V7S_LVL_IDX(iova, ++lvl)];
-		ptep = iopte_deref(pte, lvl);
-	} while (ARM_V7S_PTE_IS_TABLE(pte, lvl));
-
-	if (!ARM_V7S_PTE_IS_VALID(pte))
+	pte = arm_v7s_get_pte(data, iova, &lvl);
+	if (!pte)
 		return 0;
 
 	mask = ARM_V7S_LVL_MASK(lvl);
@@ -669,8 +770,11 @@ static struct io_pgtable *arm_v7s_alloc_pgtable(struct io_pgtable_cfg *cfg,
 
 	data->iop.ops = (struct io_pgtable_ops) {
 		.map		= arm_v7s_map,
+		.map_sg		= arm_v7s_map_sg,
 		.unmap		= arm_v7s_unmap,
 		.iova_to_phys	= arm_v7s_iova_to_phys,
+		.is_iova_coherent = arm_v7s_is_iova_coherent,
+		.iova_to_pte	= arm_v7s_iova_get_pte,
 	};
 
 	/* We have to do this early for __arm_v7s_alloc_table to work... */
@@ -757,6 +861,64 @@ static struct iommu_gather_ops dummy_tlb_ops = {
 		selftest_running = false;		\
 		-EFAULT;				\
 })
+
+static int __init arm_v7s_sg_selftest(struct io_pgtable_ops *ops)
+{
+	struct page *pages[2] = { NULL, NULL };
+	struct scatterlist sg[2];
+	unsigned long iova = SZ_128M;
+	size_t partial = 0;
+	int ret = -EFAULT;
+
+	if (!ops->map_sg || !ops->iova_to_pte || !ops->is_iova_coherent)
+		return -EOPNOTSUPP;
+	pages[0] = alloc_page(GFP_KERNEL | GFP_DMA);
+	pages[1] = alloc_page(GFP_KERNEL | GFP_DMA);
+	if (!pages[0] || !pages[1]) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	sg_init_table(sg, 2);
+	sg_set_page(&sg[0], pages[0], SZ_4K, 0);
+	sg_set_page(&sg[1], pages[1], SZ_4K, 0);
+	if (ops->map_sg(ops, iova, sg, 2, IOMMU_READ | IOMMU_WRITE |
+			IOMMU_CACHE, &partial) != 2 * SZ_4K || partial ||
+	    ops->iova_to_phys(ops, iova + 42) != page_to_phys(pages[0]) + 42 ||
+	    ops->iova_to_phys(ops, iova + SZ_4K + 42) != page_to_phys(pages[1]) + 42 ||
+	    !ops->iova_to_pte(ops, iova) || !ops->is_iova_coherent(ops, iova) ||
+	    ops->unmap(ops, iova, 2 * SZ_4K) != 2 * SZ_4K ||
+	    ops->iova_to_phys(ops, iova))
+		goto out;
+
+	/* A failed second entry must expose exactly the prefix to roll back. */
+	sg[1].offset = 1;
+	if (ops->map_sg(ops, iova, sg, 2, IOMMU_READ, &partial) ||
+	    partial != SZ_4K || ops->is_iova_coherent(ops, iova) ||
+	    ops->unmap(ops, iova, partial) != partial ||
+	    ops->iova_to_pte(ops, iova))
+		goto out;
+	sg[1].offset = 0;
+
+	/* Rollback must preserve a mapping that existed before map_sg. */
+	if (ops->map(ops, iova + SZ_4K, page_to_phys(pages[1]), SZ_4K, IOMMU_READ) ||
+	    ops->map_sg(ops, iova, sg, 2, IOMMU_READ, &partial) ||
+	    partial != SZ_4K || ops->unmap(ops, iova, partial) != partial ||
+	    ops->iova_to_phys(ops, iova + SZ_4K) != page_to_phys(pages[1]) ||
+	    ops->unmap(ops, iova + SZ_4K, SZ_4K) != SZ_4K)
+		goto out;
+	if (ops->map(ops, iova, BIT_ULL(32), SZ_4K, IOMMU_READ) != -EINVAL ||
+	    ops->map(ops, BIT_ULL(32), page_to_phys(pages[0]), SZ_4K,
+		     IOMMU_READ) != -EINVAL || ops->iova_to_phys(ops, BIT_ULL(32)))
+		goto out;
+	ret = 0;
+	pr_info("scatter-gather and donor callback self tests ok\n");
+out:
+	if (pages[0])
+		__free_page(pages[0]);
+	if (pages[1])
+		__free_page(pages[1]);
+	return ret;
+}
 
 static int __init arm_v7s_do_selftests(void)
 {
@@ -863,6 +1025,10 @@ static int __init arm_v7s_do_selftests(void)
 		i = find_next_bit(&cfg.pgsize_bitmap, BITS_PER_LONG, i);
 	}
 
+	if (arm_v7s_sg_selftest(ops)) {
+		free_io_pgtable_ops(ops);
+		return __FAIL(ops);
+	}
 	free_io_pgtable_ops(ops);
 
 	selftest_running = false;
