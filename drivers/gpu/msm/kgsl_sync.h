@@ -15,6 +15,7 @@
 #define __KGSL_SYNC_H
 
 #include <linux/sync_file.h>
+#include <linux/workqueue.h>
 #include "kgsl_device.h"
 
 #define KGSL_TIMELINE_NAME_LEN 32
@@ -65,18 +66,21 @@ struct kgsl_sync_fence {
 };
 
 /**
- * struct kgsl_sync_fence_cb - Used for fence callbacks
+ * struct kgsl_sync_fence_waiter - Used for fence callbacks
  * fence_cb: Fence callback struct
  * fence: Pointer to the fence for which the callback is done
  * priv: Private data for the callback
- * func: Pointer to the kgsl function to call. This function should return
- * false if the sync callback is marked for cancellation in a separate thread.
+ * work: Runs completion outside the fence spinlock
+ * name: Cached timeline name used by the legacy command batch
+ * func: Legacy completion callback; cancellation wins only before signaling
  */
-struct kgsl_sync_fence_cb {
+struct kgsl_sync_fence_waiter {
 	struct fence_cb fence_cb;
+	struct work_struct work;
+	char name[32];
 	struct fence *fence;
 	void *priv;
-	bool (*func)(void *priv);
+	void (*func)(void *priv);
 };
 
 struct kgsl_syncsource;
@@ -92,11 +96,10 @@ void kgsl_sync_timeline_destroy(struct kgsl_context *context);
 
 void kgsl_sync_timeline_put(struct kgsl_sync_timeline *ktimeline);
 
-struct kgsl_sync_fence_cb *kgsl_sync_fence_async_wait(int fd,
-					bool (*func)(void *priv), void *priv,
-					struct event_fence_info *info_ptr);
+struct kgsl_sync_fence_waiter *kgsl_sync_fence_async_wait(int fd,
+					void (*func)(void *priv), void *priv);
 
-void kgsl_sync_fence_async_cancel(struct kgsl_sync_fence_cb *kcb);
+int kgsl_sync_fence_async_cancel(struct kgsl_sync_fence_waiter *kcb);
 
 long kgsl_ioctl_syncsource_create(struct kgsl_device_private *dev_priv,
 					unsigned int cmd, void *data);
@@ -112,8 +115,6 @@ void kgsl_syncsource_put(struct kgsl_syncsource *syncsource);
 void kgsl_syncsource_process_release_syncsources(
 		struct kgsl_process_private *private);
 
-void kgsl_dump_fence(struct kgsl_drawobj_sync_event *event,
-					char *fence_str, int len);
 
 #else
 static inline int kgsl_add_fence_event(struct kgsl_device *device,
@@ -125,7 +126,7 @@ static inline int kgsl_add_fence_event(struct kgsl_device *device,
 
 static inline int kgsl_sync_timeline_create(struct kgsl_context *context)
 {
-	context->ktimeline = NULL;
+	context->timeline = NULL;
 	return 0;
 }
 
@@ -138,16 +139,16 @@ static inline void kgsl_sync_timeline_put(struct kgsl_sync_timeline *ktimeline)
 }
 
 
-static inline struct kgsl_sync_fence_cb *kgsl_sync_fence_async_wait(int fd,
-					bool (*func)(void *priv), void *priv,
-					struct event_fence_info *info_ptr)
+static inline struct kgsl_sync_fence_waiter *kgsl_sync_fence_async_wait(int fd,
+					void (*func)(void *priv), void *priv)
 {
 	return NULL;
 }
 
-static inline void
-kgsl_sync_fence_async_cancel(struct kgsl_sync_fence_cb *kcb)
+static inline int
+kgsl_sync_fence_async_cancel(struct kgsl_sync_fence_waiter *kcb)
 {
+	return 0;
 }
 
 static inline long
@@ -189,11 +190,13 @@ static inline void kgsl_syncsource_process_release_syncsources(
 
 }
 
-static inline void kgsl_dump_fence(struct kgsl_drawobj_sync_event *event,
-					char *fence_str, int len)
-{
-}
+
 
 #endif /* CONFIG_SYNC_FILE */
+
+static inline void kgsl_sync_fence_log(struct fence *fence)
+{
+	(void)fence;
+}
 
 #endif /* __KGSL_SYNC_H */

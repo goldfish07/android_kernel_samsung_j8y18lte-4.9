@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2017,2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -112,7 +112,7 @@ void a5xx_crashdump_init(struct adreno_device *adreno_dev);
 
 void a5xx_hwcg_set(struct adreno_device *adreno_dev, bool on);
 
-#define A5XX_CP_RB_CNTL_DEFAULT ((1 << 27) | ((ilog2(4) << 8) & 0x1F00) | \
+#define A5XX_CP_RB_CNTL_DEFAULT (((ilog2(4) << 8) & 0x1F00) | \
 		(ilog2(KGSL_RB_DWORDS >> 1) & 0x3F))
 /* GPMU interrupt multiplexor */
 #define FW_INTR_INFO			(0)
@@ -142,14 +142,29 @@ void a5xx_hwcg_set(struct adreno_device *adreno_dev, bool on);
 #define WAKEUP_ACK			BIT(1)
 #define IDLE_FULL_ACK			BIT(0)
 
-/* A5XX_GPMU_GPMU_ISENSE_CTRL */
-#define	ISENSE_CGC_EN_DISABLE		BIT(0)
-
 /* A5XX_GPMU_TEMP_SENSOR_CONFIG */
 #define GPMU_BCL_ENABLED		BIT(4)
 #define GPMU_LLM_ENABLED		BIT(9)
 #define GPMU_ISENSE_STATUS		GENMASK(3, 0)
 #define GPMU_ISENSE_END_POINT_CAL_ERR	BIT(0)
+
+/* A5XX_GPU_CS_AMP_CALIBRATION_CONTROL1 */
+#define AMP_SW_TRIM_START		BIT(0)
+
+/* A5XX_GPU_CS_SENSOR_GENERAL_STATUS */
+#define SS_AMPTRIM_DONE			BIT(11)
+#define CS_PWR_ON_STATUS		BIT(10)
+
+/* A5XX_GPU_CS_AMP_CALIBRATION_STATUS*_* */
+#define AMP_OUT_OF_RANGE_ERR		BIT(4)
+#define AMP_OFFSET_CHECK_MAX_ERR	BIT(2)
+#define AMP_OFFSET_CHECK_MIN_ERR	BIT(1)
+
+/* A5XX_GPU_CS_AMP_CALIBRATION_DONE */
+#define SW_OPAMP_CAL_DONE           BIT(0)
+
+#define AMP_CALIBRATION_ERR (AMP_OFFSET_CHECK_MIN_ERR | \
+		AMP_OFFSET_CHECK_MAX_ERR | AMP_OUT_OF_RANGE_ERR)
 
 #define AMP_CALIBRATION_RETRY_CNT	3
 #define AMP_CALIBRATION_TIMEOUT		6
@@ -179,11 +194,8 @@ void a5xx_hwcg_set(struct adreno_device *adreno_dev, bool on);
 #define AGC_LM_CONFIG_ENABLE_GPMU_ADAPTIVE (1)
 
 #define AGC_LM_CONFIG_ENABLE_ERROR	(3 << 4)
-#define AGC_LM_CONFIG_ISENSE_ENABLE     (1 << 4)
 
 #define AGC_THROTTLE_SEL_DCS		(1 << 8)
-#define AGC_THROTTLE_DISABLE            (2 << 8)
-
 
 #define AGC_LLM_ENABLED			(1 << 16)
 #define	AGC_GPU_VERSION_MASK		GENMASK(18, 17)
@@ -193,7 +205,7 @@ void a5xx_hwcg_set(struct adreno_device *adreno_dev, bool on);
 
 #define AGC_LEVEL_CONFIG		(140/4)
 
-#define LM_DCVS_LIMIT			1
+#define LM_DCVS_LIMIT			2
 /* FW file tages */
 #define GPMU_FIRMWARE_ID		2
 #define GPMU_SEQUENCE_ID		3
@@ -210,7 +222,6 @@ void a5xx_hwcg_set(struct adreno_device *adreno_dev, bool on);
 #define LM_SEQUENCE_ID			1
 #define MAX_SEQUENCE_ID			3
 
-#define GPMU_ISENSE_SAVE	(A5XX_GPMU_DATA_RAM_BASE + 200/4)
 /* LM defaults */
 #define LM_DEFAULT_LIMIT		6000
 #define A530_DEFAULT_LEAKAGE		0x004E001A

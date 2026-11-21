@@ -1,4 +1,4 @@
-/* Copyright (c) 2002,2007-2021, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2002,2007-2017 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -24,6 +24,7 @@
 
 #include "kgsl.h"
 #include "kgsl_sharedmem.h"
+#include "kgsl_cffdump.h"
 #include "kgsl_device.h"
 #include "kgsl_log.h"
 #include "kgsl_mmu.h"
@@ -110,25 +111,27 @@ imported_mem_show(struct kgsl_process_private *priv,
 		id++, entry = idr_get_next(&priv->mem_idr, &id)) {
 
 		int egl_surface_count = 0, egl_image_count = 0;
-		struct kgsl_memdesc *m = &entry->memdesc;
+		struct kgsl_memdesc *m;
 
-		if ((kgsl_memdesc_usermem_type(m) != KGSL_MEM_ENTRY_ION) ||
-			entry->pending_free || (kgsl_mem_entry_get(entry) == 0))
+		if (kgsl_mem_entry_get(entry) == 0)
 			continue;
 		spin_unlock(&priv->mem_lock);
 
-		kgsl_get_egl_counts(entry, &egl_surface_count,
-				&egl_image_count);
+		m = &entry->memdesc;
+		if (kgsl_memdesc_usermem_type(m) == KGSL_MEM_ENTRY_ION) {
+			kgsl_get_egl_counts(entry, &egl_surface_count,
+					&egl_image_count);
 
-		if (kgsl_memdesc_get_memtype(m) ==
-				KGSL_MEMTYPE_EGL_SURFACE)
-			imported_mem += m->size;
-		else if (egl_surface_count == 0) {
-			uint64_t size = m->size;
+			if (kgsl_memdesc_get_memtype(m) ==
+						KGSL_MEMTYPE_EGL_SURFACE)
+				imported_mem += m->size;
+			else if (egl_surface_count == 0) {
+				uint64_t size = m->size;
 
-			do_div(size, (egl_image_count ?
-					egl_image_count : 1));
-			imported_mem += size;
+				do_div(size, (egl_image_count ?
+							egl_image_count : 1));
+				imported_mem += size;
+			}
 		}
 
 		kgsl_mem_entry_put(entry);
@@ -268,7 +271,7 @@ void kgsl_process_init_sysfs(struct kgsl_device *device,
 	/* Keep private valid until the sysfs enries are removed. */
 	kgsl_process_private_get(private);
 
-	snprintf(name, sizeof(name), "%d", pid_nr(private->pid));
+	snprintf(name, sizeof(name), "%d", private->pid);
 
 	if (kobject_init_and_add(&private->kobj, &ktype_mem_entry,
 		kgsl_driver.prockobj, name)) {
@@ -413,7 +416,7 @@ int kgsl_allocate_user(struct kgsl_device *device,
 {
 	int ret;
 
-	kgsl_memdesc_init(device, memdesc, flags);
+	memdesc->flags = flags;
 
 	if (kgsl_mmu_get_mmutype(device) == KGSL_MMU_TYPE_NONE)
 		ret = kgsl_sharedmem_alloc_contig(device, memdesc, size);
@@ -445,6 +448,8 @@ static int kgsl_page_alloc_vmfault(struct kgsl_memdesc *memdesc,
 		get_page(page);
 		vmf->page = page;
 
+		memdesc->mapsize += PAGE_SIZE;
+
 		return 0;
 	}
 
@@ -462,8 +467,7 @@ static void kgsl_page_alloc_unmap_kernel(struct kgsl_memdesc *memdesc)
 {
 	mutex_lock(&kernel_map_global_lock);
 	if (!memdesc->hostptr) {
-		/* If already unmapped the refcount should be 0 */
-		WARN_ON(memdesc->hostptr_count);
+		BUG_ON(memdesc->hostptr_count);
 		goto done;
 	}
 	memdesc->hostptr_count--;
@@ -574,6 +578,8 @@ static int kgsl_contiguous_vmfault(struct kgsl_memdesc *memdesc,
 		return VM_FAULT_OOM;
 	else if (ret == -EFAULT)
 		return VM_FAULT_SIGBUS;
+
+	memdesc->mapsize += PAGE_SIZE;
 
 	return VM_FAULT_NOPAGE;
 }
@@ -765,41 +771,6 @@ int kgsl_cache_range_op(struct kgsl_memdesc *memdesc, uint64_t offset,
 }
 EXPORT_SYMBOL(kgsl_cache_range_op);
 
-void kgsl_memdesc_init(struct kgsl_device *device,
-			struct kgsl_memdesc *memdesc, uint64_t flags)
-{
-	struct kgsl_mmu *mmu = &device->mmu;
-	unsigned int align;
-
-	memset(memdesc, 0, sizeof(*memdesc));
-	/* Turn off SVM if the system doesn't support it */
-	if (!kgsl_mmu_use_cpu_map(mmu))
-		flags &= ~((uint64_t) KGSL_MEMFLAGS_USE_CPU_MAP);
-
-	/* Secure memory disables advanced addressing modes */
-	if (flags & KGSL_MEMFLAGS_SECURE)
-		flags &= ~((uint64_t) KGSL_MEMFLAGS_USE_CPU_MAP);
-
-	/* Disable IO coherence if it is not supported on the chip */
-	if (!MMU_FEATURE(mmu, KGSL_MMU_IO_COHERENT))
-		flags &= ~((uint64_t) KGSL_MEMFLAGS_IOCOHERENT);
-
-	if (MMU_FEATURE(mmu, KGSL_MMU_NEED_GUARD_PAGE))
-		memdesc->priv |= KGSL_MEMDESC_GUARD_PAGE;
-
-	if (flags & KGSL_MEMFLAGS_SECURE)
-		memdesc->priv |= KGSL_MEMDESC_SECURE;
-
-	memdesc->flags = flags;
-	memdesc->dev = device->dev->parent;
-
-	align = max_t(unsigned int,
-		(memdesc->flags & KGSL_MEMALIGN_MASK) >> KGSL_MEMALIGN_SHIFT,
-		ilog2(PAGE_SIZE));
-	kgsl_memdesc_set_align(memdesc, align);
-	spin_lock_init(&memdesc->lock);
-}
-
 int
 kgsl_sharedmem_page_alloc_user(struct kgsl_memdesc *memdesc,
 			uint64_t size)
@@ -820,23 +791,11 @@ kgsl_sharedmem_page_alloc_user(struct kgsl_memdesc *memdesc,
 
 	align = (memdesc->flags & KGSL_MEMALIGN_MASK) >> KGSL_MEMALIGN_SHIFT;
 
-	/*
-	 * As 1MB is the max supported page size, use the alignment
-	 * corresponding to 1MB page to make sure higher order pages
-	 * are used if possible for a given memory size. Also, we
-	 * don't need to update alignment in memdesc flags in case
-	 * higher order page is used, as memdesc flags represent the
-	 * virtual alignment specified by the user which is anyways
-	 * getting satisfied.
-	 */
-	if (align < ilog2(SZ_1M))
-		align = ilog2(SZ_1M);
-
 	page_size = kgsl_get_page_size(size, align);
 
 	/*
 	 * The alignment cannot be less than the intended page size - it can be
-	 * larger however to accommodate hardware quirks
+	 * larger however to accomodate hardware quirks
 	 */
 
 	if (align < ilog2(page_size)) {
@@ -862,8 +821,6 @@ kgsl_sharedmem_page_alloc_user(struct kgsl_memdesc *memdesc,
 	 */
 
 	memdesc->pages = kgsl_malloc(len_alloc * sizeof(struct page *));
-	memdesc->page_count = 0;
-	memdesc->size = 0;
 
 	if (memdesc->pages == NULL) {
 		ret = -ENOMEM;
@@ -1000,6 +957,8 @@ void kgsl_sharedmem_free(struct kgsl_memdesc *memdesc)
 
 	if (memdesc->pages)
 		kgsl_free(memdesc->pages);
+
+	memset(memdesc, 0, sizeof(*memdesc));
 }
 EXPORT_SYMBOL(kgsl_sharedmem_free);
 
@@ -1009,11 +968,7 @@ kgsl_sharedmem_readl(const struct kgsl_memdesc *memdesc,
 			uint64_t offsetbytes)
 {
 	uint32_t *src;
-
-	if (WARN_ON(memdesc == NULL || memdesc->hostptr == NULL ||
-		dst == NULL))
-		return -EINVAL;
-
+	BUG_ON(memdesc == NULL || memdesc->hostptr == NULL || dst == NULL);
 	WARN_ON(offsetbytes % sizeof(uint32_t) != 0);
 	if (offsetbytes % sizeof(uint32_t) != 0)
 		return -EINVAL;
@@ -1022,10 +977,6 @@ kgsl_sharedmem_readl(const struct kgsl_memdesc *memdesc,
 	if (offsetbytes > (memdesc->size - sizeof(uint32_t)))
 		return -ERANGE;
 
-	/*
-	 * We are reading shared memory between CPU and GPU.
-	 * Make sure reads before this are complete
-	 */
 	rmb();
 	src = (uint32_t *)(memdesc->hostptr + offsetbytes);
 	*dst = *src;
@@ -1040,10 +991,7 @@ kgsl_sharedmem_writel(struct kgsl_device *device,
 			uint32_t src)
 {
 	uint32_t *dst;
-
-	if (WARN_ON(memdesc == NULL || memdesc->hostptr == NULL))
-		return -EINVAL;
-
+	BUG_ON(memdesc == NULL || memdesc->hostptr == NULL);
 	WARN_ON(offsetbytes % sizeof(uint32_t) != 0);
 	if (offsetbytes % sizeof(uint32_t) != 0)
 		return -EINVAL;
@@ -1051,13 +999,12 @@ kgsl_sharedmem_writel(struct kgsl_device *device,
 	WARN_ON(offsetbytes > (memdesc->size - sizeof(uint32_t)));
 	if (offsetbytes > (memdesc->size - sizeof(uint32_t)))
 		return -ERANGE;
+	kgsl_cffdump_write(device,
+		memdesc->gpuaddr + offsetbytes,
+		src);
 	dst = (uint32_t *)(memdesc->hostptr + offsetbytes);
 	*dst = src;
 
-	/*
-	 * We are writing to shared memory between CPU and GPU.
-	 * Make sure write above is posted immediately
-	 */
 	wmb();
 
 	return 0;
@@ -1070,11 +1017,7 @@ kgsl_sharedmem_readq(const struct kgsl_memdesc *memdesc,
 			uint64_t offsetbytes)
 {
 	uint64_t *src;
-
-	if (WARN_ON(memdesc == NULL || memdesc->hostptr == NULL ||
-		dst == NULL))
-		return -EINVAL;
-
+	BUG_ON(memdesc == NULL || memdesc->hostptr == NULL || dst == NULL);
 	WARN_ON(offsetbytes % sizeof(uint32_t) != 0);
 	if (offsetbytes % sizeof(uint32_t) != 0)
 		return -EINVAL;
@@ -1101,10 +1044,7 @@ kgsl_sharedmem_writeq(struct kgsl_device *device,
 			uint64_t src)
 {
 	uint64_t *dst;
-
-	if (WARN_ON(memdesc == NULL || memdesc->hostptr == NULL))
-		return -EINVAL;
-
+	BUG_ON(memdesc == NULL || memdesc->hostptr == NULL);
 	WARN_ON(offsetbytes % sizeof(uint32_t) != 0);
 	if (offsetbytes % sizeof(uint32_t) != 0)
 		return -EINVAL;
@@ -1112,6 +1052,10 @@ kgsl_sharedmem_writeq(struct kgsl_device *device,
 	WARN_ON(offsetbytes > (memdesc->size - sizeof(uint32_t)));
 	if (offsetbytes > (memdesc->size - sizeof(uint32_t)))
 		return -ERANGE;
+	kgsl_cffdump_write(device,
+		lower_32_bits(memdesc->gpuaddr + offsetbytes), src);
+	kgsl_cffdump_write(device,
+		upper_32_bits(memdesc->gpuaddr + offsetbytes), src);
 	dst = (uint64_t *)(memdesc->hostptr + offsetbytes);
 	*dst = src;
 
@@ -1130,12 +1074,12 @@ kgsl_sharedmem_set(struct kgsl_device *device,
 		const struct kgsl_memdesc *memdesc, uint64_t offsetbytes,
 		unsigned int value, uint64_t sizebytes)
 {
-	if (WARN_ON(memdesc == NULL || memdesc->hostptr == NULL))
-		return -EINVAL;
+	BUG_ON(memdesc == NULL || memdesc->hostptr == NULL);
+	BUG_ON(offsetbytes + sizebytes > memdesc->size);
 
-	if (WARN_ON(offsetbytes + sizebytes > memdesc->size))
-		return -EINVAL;
-
+	kgsl_cffdump_memset(device,
+		memdesc->gpuaddr + offsetbytes, value,
+		sizebytes);
 	memset(memdesc->hostptr + offsetbytes, value, sizebytes);
 	return 0;
 }
@@ -1176,7 +1120,7 @@ void kgsl_get_memory_usage(char *name, size_t name_size, uint64_t memflags)
 	else if (type < ARRAY_SIZE(memtype_str) && memtype_str[type] != NULL)
 		strlcpy(name, memtype_str[type], name_size);
 	else
-		snprintf(name, name_size, "VK/others(%3d)", type);
+		snprintf(name, name_size, "unknown(%3d)", type);
 }
 EXPORT_SYMBOL(kgsl_get_memory_usage);
 
@@ -1302,6 +1246,7 @@ static int kgsl_cma_alloc_secure(struct kgsl_device *device,
 	memdesc->ops = &kgsl_cma_ops;
 	memdesc->dev = iommu->ctx[KGSL_IOMMU_CONTEXT_SECURE].dev;
 
+	memdesc->attrs = 0;
 	memdesc->attrs |= DMA_ATTR_STRONGLY_ORDERED;
 
 	memdesc->hostptr = dma_alloc_attrs(memdesc->dev, aligned,

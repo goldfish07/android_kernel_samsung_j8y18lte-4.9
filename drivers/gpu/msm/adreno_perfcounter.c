@@ -28,20 +28,6 @@
 /* offset of enable register from select register */
 #define VBIF2_PERF_EN_REG_SEL_OFF 16
 
-/* offset of clear register from select register for GBIF */
-#define GBIF_PERF_CLR_REG_SEL_OFF 1
-
-/* offset of enable register from select register for GBIF*/
-#define GBIF_PERF_EN_REG_SEL_OFF  2
-
-/* offset of clear register from the power enable register for GBIF*/
-#define GBIF_PWR_CLR_REG_EN_OFF    1
-
-/* */
-#define GBIF_PERF_RMW_MASK   0xFF
-/* */
-#define GBIF_PWR_RMW_MASK    0x10000
-
 /* offset of clear register from the enable register */
 #define VBIF2_PERF_PWR_CLR_REG_EN_OFF 8
 
@@ -171,23 +157,12 @@ void adreno_perfcounter_restore(struct adreno_device *adreno_dev)
  */
 inline void adreno_perfcounter_save(struct adreno_device *adreno_dev)
 {
-	struct adreno_gpudev *gpudev = ADRENO_GPU_DEVICE(adreno_dev);
 	struct adreno_perfcounters *counters = ADRENO_PERFCOUNTERS(adreno_dev);
 	struct adreno_perfcount_group *group;
 	unsigned int counter, groupid;
-	int ret = 0;
 
 	if (counters == NULL)
 		return;
-
-	if (gpudev->oob_set)
-		ret = gpudev->oob_set(adreno_dev, OOB_PERFCNTR_SET_MASK,
-				OOB_PERFCNTR_CHECK_MASK,
-				OOB_PERFCNTR_CLEAR_MASK);
-
-	/* if oob_set timeout, clear the mask and return */
-	if (ret)
-		goto done;
 
 	for (groupid = 0; groupid < counters->group_count; groupid++) {
 		group = &(counters->groups[groupid]);
@@ -208,10 +183,6 @@ inline void adreno_perfcounter_save(struct adreno_device *adreno_dev)
 								counter);
 		}
 	}
-
-done:
-	if (gpudev->oob_clear)
-		gpudev->oob_clear(adreno_dev, OOB_PERFCNTR_CLEAR_MASK);
 }
 
 static int adreno_perfcounter_enable(struct adreno_device *adreno_dev,
@@ -232,7 +203,7 @@ void adreno_perfcounter_start(struct adreno_device *adreno_dev)
 	struct adreno_perfcount_group *group;
 	unsigned int i, j;
 
-	if (counters == NULL)
+	if (NULL == counters)
 		return;
 	/* group id iter */
 	for (i = 0; i < counters->group_count; i++) {
@@ -277,14 +248,14 @@ int adreno_perfcounter_read_group(struct adreno_device *adreno_dev,
 	unsigned int i, j;
 	int ret = 0;
 
-	if (counters == NULL)
+	if (NULL == counters)
 		return -EINVAL;
 
 	/* sanity check params passed in */
 	if (reads == NULL || count == 0 || count > 100)
 		return -EINVAL;
 
-	list = kmalloc_array(count, sizeof(struct kgsl_perfcounter_read_group),
+	list = kmalloc(sizeof(struct kgsl_perfcounter_read_group) * count,
 			GFP_KERNEL);
 	if (!list)
 		return -ENOMEM;
@@ -296,8 +267,7 @@ int adreno_perfcounter_read_group(struct adreno_device *adreno_dev,
 	}
 
 	mutex_lock(&device->mutex);
-
-	ret = adreno_perfcntr_active_oob_get(adreno_dev);
+	ret = kgsl_active_count_get(device);
 	if (ret) {
 		mutex_unlock(&device->mutex);
 		goto done;
@@ -326,8 +296,7 @@ int adreno_perfcounter_read_group(struct adreno_device *adreno_dev,
 		}
 	}
 
-	adreno_perfcntr_active_oob_put(adreno_dev);
-
+	kgsl_active_count_put(device);
 	mutex_unlock(&device->mutex);
 
 	/* write the data */
@@ -437,7 +406,7 @@ int adreno_perfcounter_query_group(struct adreno_device *adreno_dev,
 
 	t = min_t(unsigned int, group->reg_count, count);
 
-	buf = kmalloc_array(t, sizeof(unsigned int), GFP_KERNEL);
+	buf = kmalloc(t * sizeof(unsigned int), GFP_KERNEL);
 	if (buf == NULL) {
 		mutex_unlock(&device->mutex);
 		return -ENOMEM;
@@ -501,7 +470,7 @@ int adreno_perfcounter_get(struct adreno_device *adreno_dev,
 	if (offset_hi)
 		*offset_hi = 0;
 
-	if (counters == NULL)
+	if (NULL == counters)
 		return -EINVAL;
 
 	if (groupid >= counters->group_count)
@@ -521,9 +490,9 @@ int adreno_perfcounter_get(struct adreno_device *adreno_dev,
 		/* If it is already reserved, just increase the refcounts */
 		if ((group->regs[countable].kernelcount != 0) ||
 			(group->regs[countable].usercount != 0)) {
-			refcount_group(group, countable, flags,
-				offset, offset_hi);
-			return 0;
+				refcount_group(group, countable, flags,
+					offset, offset_hi);
+				return 0;
 		}
 
 		empty = countable;
@@ -635,6 +604,28 @@ int adreno_perfcounter_put(struct adreno_device *adreno_dev,
 	return -EINVAL;
 }
 
+static int _perfcounter_enable_pwr(struct adreno_device *adreno_dev,
+	unsigned int counter)
+{
+	/* PWR counters enabled by default on A3XX/A4XX so nothing to do */
+	if (adreno_is_a3xx(adreno_dev) || adreno_is_a4xx(adreno_dev))
+		return 0;
+
+	/*
+	 * On 5XX we have to emulate the PWR counters which are physically
+	 * missing. Program countable 6 on RBBM_PERFCTR_RBBM_0 as a substitute
+	 * for PWR:1. Don't emulate PWR:0 as nobody uses it and we don't want
+	 * to take away too many of the generic RBBM counters.
+	 */
+
+	if (counter == 0)
+		return -EINVAL;
+
+	kgsl_regwrite(KGSL_DEVICE(adreno_dev), A5XX_RBBM_PERFCTR_RBBM_SEL_0, 6);
+
+	return 0;
+}
+
 static void _perfcounter_enable_vbif(struct adreno_device *adreno_dev,
 		struct adreno_perfcounters *counters, unsigned int counter,
 		unsigned int countable)
@@ -643,40 +634,12 @@ static void _perfcounter_enable_vbif(struct adreno_device *adreno_dev,
 	struct adreno_perfcount_register *reg;
 
 	reg = &counters->groups[KGSL_PERFCOUNTER_GROUP_VBIF].regs[counter];
-
-	if (adreno_has_gbif(adreno_dev)) {
-		unsigned int shift = counter << 3;
-		unsigned int perfctr_mask = 1 << counter;
-		/*
-		 * Write 1, followed by 0 to CLR register for
-		 * clearing the counter
-		 */
-		kgsl_regrmw(device, reg->select - GBIF_PERF_CLR_REG_SEL_OFF,
-			perfctr_mask, perfctr_mask);
-		kgsl_regrmw(device, reg->select - GBIF_PERF_CLR_REG_SEL_OFF,
-			perfctr_mask, 0);
-		/* select the desired countable */
-		kgsl_regrmw(device, reg->select,
-			GBIF_PERF_RMW_MASK << shift, countable << shift);
-		/* enable counter */
-		kgsl_regrmw(device, reg->select - GBIF_PERF_EN_REG_SEL_OFF,
-			perfctr_mask, perfctr_mask);
-
-	} else {
-		/*
-		 * Write 1, followed by 0 to CLR register for
-		 * clearing the counter
-		 */
-		kgsl_regwrite(device,
-			reg->select - VBIF2_PERF_CLR_REG_SEL_OFF, 1);
-		kgsl_regwrite(device,
-			reg->select - VBIF2_PERF_CLR_REG_SEL_OFF, 0);
-		kgsl_regwrite(device,
-			reg->select, countable & VBIF2_PERF_CNT_SEL_MASK);
-		/* enable reg is 8 DWORDS before select reg */
-		kgsl_regwrite(device,
-			reg->select - VBIF2_PERF_EN_REG_SEL_OFF, 1);
-	}
+	/* Write 1, followed by 0 to CLR register for clearing the counter */
+	kgsl_regwrite(device, reg->select - VBIF2_PERF_CLR_REG_SEL_OFF, 1);
+	kgsl_regwrite(device, reg->select - VBIF2_PERF_CLR_REG_SEL_OFF, 0);
+	kgsl_regwrite(device, reg->select, countable & VBIF2_PERF_CNT_SEL_MASK);
+	/* enable reg is 8 DWORDS before select reg */
+	kgsl_regwrite(device, reg->select - VBIF2_PERF_EN_REG_SEL_OFF, 1);
 	reg->value = 0;
 }
 
@@ -687,30 +650,10 @@ static void _perfcounter_enable_vbif_pwr(struct adreno_device *adreno_dev,
 	struct adreno_perfcount_register *reg;
 
 	reg = &counters->groups[KGSL_PERFCOUNTER_GROUP_VBIF_PWR].regs[counter];
-
-	if (adreno_has_gbif(adreno_dev)) {
-		unsigned int perfctr_mask = GBIF_PWR_RMW_MASK << counter;
-		/*
-		 * Write 1, followed by 0 to CLR register for
-		 * clearing the counter
-		 */
-		kgsl_regrmw(device, reg->select + GBIF_PWR_CLR_REG_EN_OFF,
-			perfctr_mask, perfctr_mask);
-		kgsl_regrmw(device, reg->select + GBIF_PWR_CLR_REG_EN_OFF,
-			perfctr_mask, 0);
-		/* Enable the counter */
-		kgsl_regrmw(device, reg->select, perfctr_mask, perfctr_mask);
-	} else {
-		/*
-		 * Write 1, followed by 0 to CLR register for
-		 * clearing the counter
-		 */
-		kgsl_regwrite(device, reg->select +
-			VBIF2_PERF_PWR_CLR_REG_EN_OFF, 1);
-		kgsl_regwrite(device, reg->select +
-			VBIF2_PERF_PWR_CLR_REG_EN_OFF, 0);
-		kgsl_regwrite(device, reg->select, 1);
-	}
+	/* Write 1, followed by 0 to CLR register for clearing the counter */
+	kgsl_regwrite(device, reg->select + VBIF2_PERF_PWR_CLR_REG_EN_OFF, 1);
+	kgsl_regwrite(device, reg->select + VBIF2_PERF_PWR_CLR_REG_EN_OFF, 0);
+	kgsl_regwrite(device, reg->select, 1);
 	reg->value = 0;
 }
 
@@ -731,7 +674,6 @@ static void _power_counter_enable_gpmu(struct adreno_device *adreno_dev,
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	struct adreno_perfcount_register *reg;
-	unsigned int shift = (counter << 3) % (sizeof(unsigned int) * 8);
 
 	if (adreno_is_a530(adreno_dev)) {
 		if (countable > 43)
@@ -739,16 +681,18 @@ static void _power_counter_enable_gpmu(struct adreno_device *adreno_dev,
 	} else if (adreno_is_a540(adreno_dev)) {
 		if (countable > 47)
 			return;
-	} else if (adreno_is_a6xx(adreno_dev)) {
-		if (countable > 34)
-			return;
 	} else
 		/* return on platforms that have no GPMU */
 		return;
 
 	reg = &counters->groups[group].regs[counter];
-	kgsl_regrmw(device, reg->select, 0xff << shift, countable << shift);
-	adreno_writereg(adreno_dev, ADRENO_REG_GPMU_POWER_COUNTER_ENABLE, 1);
+
+	/* Move the countable to the correct byte offset */
+	countable = countable << ((counter % 4) * 8);
+
+	kgsl_regwrite(device, reg->select, countable);
+
+	kgsl_regwrite(device, A5XX_GPMU_POWER_COUNTER_ENABLE, 1);
 	reg->value = 0;
 }
 
@@ -764,23 +708,8 @@ static void _power_counter_enable_default(struct adreno_device *adreno_dev,
 
 	reg = &counters->groups[group].regs[counter];
 	kgsl_regwrite(device, reg->select, countable);
-	adreno_writereg(adreno_dev, ADRENO_REG_GPMU_POWER_COUNTER_ENABLE, 1);
+	kgsl_regwrite(device, A5XX_GPMU_POWER_COUNTER_ENABLE, 1);
 	reg->value = 0;
-}
-
-static inline bool _perfcounter_inline_update(
-	struct adreno_device *adreno_dev, unsigned int group)
-{
-	if (adreno_is_a6xx(adreno_dev)) {
-		if ((group == KGSL_PERFCOUNTER_GROUP_HLSQ) ||
-			(group == KGSL_PERFCOUNTER_GROUP_SP) ||
-			(group == KGSL_PERFCOUNTER_GROUP_TP))
-			return true;
-		else
-			return false;
-	}
-
-	return true;
 }
 
 static int _perfcounter_enable_default(struct adreno_device *adreno_dev,
@@ -790,7 +719,6 @@ static int _perfcounter_enable_default(struct adreno_device *adreno_dev,
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	struct adreno_gpudev *gpudev = ADRENO_GPU_DEVICE(adreno_dev);
 	struct adreno_perfcount_register *reg;
-	struct adreno_perfcount_group *grp;
 	int i;
 	int ret = 0;
 
@@ -805,26 +733,19 @@ static int _perfcounter_enable_default(struct adreno_device *adreno_dev,
 			if (countable == invalid_countable.countables[i])
 				return -EACCES;
 	}
-	grp = &(counters->groups[group]);
-	reg = &(grp->regs[counter]);
+	reg = &(counters->groups[group].regs[counter]);
 
-	if (_perfcounter_inline_update(adreno_dev, group) &&
-		test_bit(ADRENO_DEVICE_STARTED, &adreno_dev->priv)) {
+	if (test_bit(ADRENO_DEVICE_STARTED, &adreno_dev->priv)) {
 		struct adreno_ringbuffer *rb = &adreno_dev->ringbuffers[0];
 		unsigned int buf[4];
 		unsigned int *cmds = buf;
 		int ret;
 
-		if (gpudev->perfcounter_update && (grp->flags &
-				ADRENO_PERFCOUNTER_GROUP_RESTORE))
-			gpudev->perfcounter_update(adreno_dev, reg, false);
-
 		cmds += cp_wait_for_idle(adreno_dev, cmds);
 		*cmds++ = cp_register(adreno_dev, reg->select, 1);
 		*cmds++ = countable;
 		/* submit to highest priority RB always */
-		ret = adreno_ringbuffer_issue_internal_cmds(rb,
-				KGSL_CMD_FLAGS_PMODE, buf, cmds-buf);
+		ret = adreno_ringbuffer_issuecmds(rb, 0, buf, cmds-buf);
 		if (ret)
 			return ret;
 		/*
@@ -855,16 +776,12 @@ static int _perfcounter_enable_default(struct adreno_device *adreno_dev,
 		}
 	} else {
 		/* Select the desired perfcounter */
-		if (gpudev->perfcounter_update && (grp->flags &
-				ADRENO_PERFCOUNTER_GROUP_RESTORE))
-			ret = gpudev->perfcounter_update(adreno_dev, reg, true);
-		else
-			kgsl_regwrite(device, reg->select, countable);
+		kgsl_regwrite(device, reg->select, countable);
 	}
 
 	if (!ret)
 		reg->value = 0;
-	return ret;
+	return 0;
 }
 
 /**
@@ -882,7 +799,6 @@ static int adreno_perfcounter_enable(struct adreno_device *adreno_dev,
 	unsigned int group, unsigned int counter, unsigned int countable)
 {
 	struct adreno_perfcounters *counters = ADRENO_PERFCOUNTERS(adreno_dev);
-	struct adreno_gpudev *gpudev  = ADRENO_GPU_DEVICE(adreno_dev);
 
 	if (counters == NULL)
 		return -EINVAL;
@@ -898,9 +814,7 @@ static int adreno_perfcounter_enable(struct adreno_device *adreno_dev,
 		/* alwayson counter is global, so init value is 0 */
 		break;
 	case KGSL_PERFCOUNTER_GROUP_PWR:
-		if (gpudev->enable_pwr_counters)
-			return gpudev->enable_pwr_counters(adreno_dev, counter);
-		return 0;
+		return _perfcounter_enable_pwr(adreno_dev, counter);
 	case KGSL_PERFCOUNTER_GROUP_VBIF:
 		if (countable > VBIF2_PERF_CNT_SEL_MASK)
 			return -EINVAL;
@@ -926,11 +840,6 @@ static int adreno_perfcounter_enable(struct adreno_device *adreno_dev,
 	case KGSL_PERFCOUNTER_GROUP_ALWAYSON_PWR:
 		_power_counter_enable_alwayson(adreno_dev, counters);
 		break;
-	case KGSL_PERFCOUNTER_GROUP_RBBM:
-		/* The following rbbm countable is not reliable on a540 */
-		if (adreno_is_a540(adreno_dev))
-			if (countable == A5XX_RBBM_ALWAYS_COUNT)
-				return -EINVAL;
 	default:
 		return _perfcounter_enable_default(adreno_dev, counters, group,
 				counter, countable);
@@ -966,7 +875,7 @@ static uint64_t _perfcounter_read_pwr(struct adreno_device *adreno_dev,
 
 	if (adreno_is_a3xx(adreno_dev)) {
 		/* On A3XX we need to freeze the counter so we can read it */
-		if (counter == 0)
+		if (0 == counter)
 			enable_bit = 0x00010000;
 		else
 			enable_bit = 0x00020000;
