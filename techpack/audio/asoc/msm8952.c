@@ -900,6 +900,10 @@ static uint32_t get_mi2s_rx_clk_val(int port_id)
 {
 	uint32_t clk_val = 0;
 
+	if (IS_ENABLED(CONFIG_SND_SOC_J8_TFA9896) &&
+	    port_id == AFE_PORT_ID_QUATERNARY_MI2S_RX)
+		return 48000 * 16 * 2;
+
 	/*
 	 *  Derive clock value based on sample rate, bits per sample and
 	 *  channel count is used as 2
@@ -1920,6 +1924,103 @@ static int msm_audrx_init(struct snd_soc_pcm_runtime *rtd)
 done:
 	return 0;
 }
+
+/* Match the fixed J8 amplifier frame format from the 3.18 machine driver. */
+static int j8_tfa9896_hw_params(struct snd_pcm_substream *substream,
+			      struct snd_pcm_hw_params *params)
+{
+	param_set_mask(params, SNDRV_PCM_HW_PARAM_FORMAT, SNDRV_PCM_FORMAT_S16_LE);
+	return 0;
+}
+
+static int j8_tfa9896_rx_fixup(struct snd_soc_pcm_runtime *rtd,
+			     struct snd_pcm_hw_params *params)
+{
+	struct snd_interval *rate = hw_param_interval(params,
+						 SNDRV_PCM_HW_PARAM_RATE);
+	struct snd_interval *channels = hw_param_interval(params,
+						 SNDRV_PCM_HW_PARAM_CHANNELS);
+
+	param_set_mask(params, SNDRV_PCM_HW_PARAM_FORMAT, SNDRV_PCM_FORMAT_S16_LE);
+	rate->min = rate->max = 48000;
+	channels->min = channels->max = 2;
+	return 0;
+}
+
+/* Playback and VI feedback share the quaternary pin state. */
+static DEFINE_MUTEX(j8_tfa9896_stream_lock);
+static unsigned int j8_tfa9896_users;
+
+static int j8_tfa9896_startup(struct snd_pcm_substream *substream)
+{
+	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct msm_asoc_mach_data *pdata = snd_soc_card_get_drvdata(rtd->card);
+	int ret;
+	u32 val;
+
+	mutex_lock(&j8_tfa9896_stream_lock);
+	if (!q6core_is_adsp_ready()) {
+		ret = -EINVAL;
+		goto out;
+	}
+	if (pdata->vaddr_gpio_mux_mic_ctl) {
+		val = ioread32(pdata->vaddr_gpio_mux_mic_ctl);
+		iowrite32(val | 0x02020002, pdata->vaddr_gpio_mux_mic_ctl);
+	}
+	ret = msm_mi2s_sclk_ctl(substream, true);
+	if (ret)
+		goto out;
+	if (!j8_tfa9896_users) {
+		if (!pdata->mi2s_gpio_p[QUAT_MI2S]) {
+			ret = -ENODEV;
+			goto clock_off;
+		}
+		ret = msm_cdc_pinctrl_select_active_state(pdata->mi2s_gpio_p[QUAT_MI2S]);
+		if (ret) {
+			msm_cdc_pinctrl_select_sleep_state(pdata->mi2s_gpio_p[QUAT_MI2S]);
+			goto clock_off;
+		}
+		ret = snd_soc_dai_set_fmt(rtd->cpu_dai, SND_SOC_DAIFMT_CBS_CFS);
+		if (ret) {
+			msm_cdc_pinctrl_select_sleep_state(pdata->mi2s_gpio_p[QUAT_MI2S]);
+			goto clock_off;
+		}
+	}
+	j8_tfa9896_users++;
+	goto out;
+clock_off:
+	msm_mi2s_sclk_ctl(substream, false);
+out:
+	mutex_unlock(&j8_tfa9896_stream_lock);
+	return ret;
+}
+
+static void j8_tfa9896_shutdown(struct snd_pcm_substream *substream)
+{
+	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct msm_asoc_mach_data *pdata = snd_soc_card_get_drvdata(rtd->card);
+	int ret;
+
+	mutex_lock(&j8_tfa9896_stream_lock);
+	if (!j8_tfa9896_users)
+		goto out;
+	ret = msm_mi2s_sclk_ctl(substream, false);
+	if (ret)
+		pr_err("J8 audio: quaternary clock disable failed=%d\n", ret);
+	if (!--j8_tfa9896_users) {
+		ret = msm_cdc_pinctrl_select_sleep_state(pdata->mi2s_gpio_p[QUAT_MI2S]);
+		if (ret)
+			pr_err("J8 audio: quaternary pin sleep failed=%d\n", ret);
+	}
+out:
+	mutex_unlock(&j8_tfa9896_stream_lock);
+}
+
+static const struct snd_soc_ops j8_tfa9896_quat_ops = {
+	.startup = j8_tfa9896_startup,
+	.hw_params = j8_tfa9896_hw_params,
+	.shutdown = j8_tfa9896_shutdown,
+};
 
 static struct snd_soc_ops msm8952_quat_mi2s_be_ops = {
 	.startup = msm_quat_mi2s_snd_startup,
@@ -3594,6 +3695,89 @@ static struct snd_soc_card *msm8952_populate_sndcard_dailinks(
 }
 
 
+static void j8_tfa9896_release(void *data)
+{
+	struct snd_soc_card *card = data;
+
+	of_node_put(card->codec_conf->of_node);
+	card->codec_conf = NULL;
+	card->num_configs = 0;
+}
+
+/* Bind only the J8 quaternary speaker/feedback backends, with managed DT refs. */
+static int j8_tfa9896_configure(struct device *dev, struct snd_soc_card *card)
+{
+	struct device_node *speaker, *amp;
+	struct snd_soc_codec_conf *conf;
+	const char *dai_name;
+	unsigned int i, rx = 0, tx = 0;
+	int ret;
+
+	if (!IS_ENABLED(CONFIG_SND_SOC_J8_TFA9896))
+		return 0;
+	for (i = 0; i < card->num_links; i++) {
+		struct snd_soc_dai_link *link = &card->dai_link[i];
+
+		if (!link->no_pcm)
+			continue;
+		if (link->id == MSM_BACKEND_DAI_QUATERNARY_MI2S_RX)
+			rx++;
+		if (link->id == MSM_BACKEND_DAI_QUATERNARY_MI2S_TX)
+			tx++;
+	}
+	if (rx != 1 || tx != 1 || card->num_configs)
+		return -EINVAL;
+	speaker = of_get_child_by_name(dev->of_node, "speaker-dai");
+	if (!speaker)
+		return -ENODEV;
+	amp = of_parse_phandle(speaker, "sound-dai", 0);
+	if (!amp) {
+		of_node_put(speaker);
+		return -ENODEV;
+	}
+	ret = snd_soc_of_get_dai_name(speaker, &dai_name);
+	of_node_put(speaker);
+	if (ret) {
+		of_node_put(amp);
+		return ret;
+	}
+	conf = devm_kzalloc(dev, sizeof(*conf), GFP_KERNEL);
+	if (!conf) {
+		of_node_put(amp);
+		return -ENOMEM;
+	}
+	conf->of_node = amp;
+	conf->name_prefix = "NXP";
+	/* The card is static: a deferred probe must clear managed configuration. */
+	card->codec_conf = conf;
+	card->num_configs = 1;
+	ret = devm_add_action_or_reset(dev, j8_tfa9896_release, card);
+	if (ret)
+		return ret;
+	for (i = 0; i < card->num_links; i++) {
+		struct snd_soc_dai_link *link = &card->dai_link[i];
+
+		if (!link->no_pcm ||
+		    (link->id != MSM_BACKEND_DAI_QUATERNARY_MI2S_RX &&
+		     link->id != MSM_BACKEND_DAI_QUATERNARY_MI2S_TX))
+			continue;
+		link->codec_name = NULL;
+		link->codec_of_node = amp;
+		link->codec_dai_name = dai_name;
+		link->codecs = NULL;
+		link->num_codecs = 0;
+		link->dai_fmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_NF |
+			SND_SOC_DAIFMT_CBS_CFS;
+		link->ops = &j8_tfa9896_quat_ops;
+		if (link->id == MSM_BACKEND_DAI_QUATERNARY_MI2S_RX)
+			link->be_hw_params_fixup = j8_tfa9896_rx_fixup;
+	}
+	card->codec_conf = conf;
+	card->num_configs = 1;
+	dev_info(dev, "J8 audio: TFA9896 quaternary playback/feedback links enabled\n");
+	return 0;
+}
+
 static int msm8952_asoc_machine_probe(struct platform_device *pdev)
 {
 	struct snd_soc_card *card;
@@ -3773,6 +3957,9 @@ parse_mclk_freq:
 	/* HS50 add SR-QL3095-01-48 bring up spc pa by xuyuqing at 2020/08/07 end */
 
 	card = msm8952_populate_sndcard_dailinks(&pdev->dev);
+	ret = j8_tfa9896_configure(&pdev->dev, card);
+	if (ret)
+		goto err;
 	dev_dbg(&pdev->dev, "default codec configured\n");
 	num_strings = of_property_count_strings(pdev->dev.of_node,
 			ext_pa);

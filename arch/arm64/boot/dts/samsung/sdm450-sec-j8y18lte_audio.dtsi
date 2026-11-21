@@ -148,6 +148,7 @@
 		qcom,mpp-standalone-mode;
 		qcom,nxp-amp-conf = <0x1006>;
 		speaker-amps = <&nxp_tfa98xx>;
+		qcom,quat-mi2s-gpios = <&j8_quat_i2s_gpios>;
 
 		qcom,audio-routing =
 				"RX_BIAS", "MCLK",
@@ -281,4 +282,14 @@
 			sound-dai = <&nxp_tfa98xx 0>;
 		};
 	};
+	/* The 4.9 machine driver uses a separate pinctrl consumer per MI2S. */
+	j8_quat_i2s_gpios: j8-quat-i2s-gpios {
+		compatible = "qcom,msm-cdc-pinctrl";
+		/* Keep all existing imported phandle assignments stable. */
+		phandle = <0x1f8>;
+		pinctrl-names = "aud_active", "aud_sleep";
+		pinctrl-0 = <&quat_tlmm_lines_act &quat_tlmm_ws_lines_act>;
+		pinctrl-1 = <&quat_tlmm_lines_sus &quat_tlmm_ws_lines_sus>;
+	};
+
 };

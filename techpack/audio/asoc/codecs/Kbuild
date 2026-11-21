@@ -240,3 +240,6 @@ hdmi_dlkm-y := $(HDMICODEC_OBJS)
 
 # inject some build related information
 DEFINES += -DBUILD_TIMESTAMP=\"$(shell date -u +'%Y-%m-%dT%H:%M:%SZ')\"
+
+# J8 speaker amplifier from the working 3.18 stack.
+obj-$(CONFIG_SND_SOC_J8_TFA9896) += j8_tfa9896/

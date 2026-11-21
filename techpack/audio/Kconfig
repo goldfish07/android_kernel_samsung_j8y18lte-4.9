@@ -75,3 +75,10 @@ config SND_HWDEP_ROUTING
 	bool
 	default y if QCOM_J8_AUDIO
 
+
+config SND_SOC_J8_TFA9896
+	bool "J8 TFA9896 speaker amplifier"
+	depends on QCOM_J8_AUDIO && I2C
+	select REGMAP_I2C
+	help
+	  Restore the J8 NXP amplifier and quaternary MI2S connections.
